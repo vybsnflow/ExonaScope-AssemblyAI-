@@ -1,0 +1,8 @@
+streamlit
+PyMuPDF
+openai>=1.0.0
+python-docx
+pytesseract
+pdf2image
+Pillow
+requests
