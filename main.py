@@ -222,4 +222,3 @@ if parsed_segments:
         else:
             st.error(facts)
 
-
