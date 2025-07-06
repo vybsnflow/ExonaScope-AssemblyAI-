@@ -7,6 +7,6 @@
     pkgs.ffmpeg
     pkgs.pkg-config
     pkgs.zlib
-    pkgs.moviepy
+    pkgs.moviepy>=2.0.0
   ];
 }
