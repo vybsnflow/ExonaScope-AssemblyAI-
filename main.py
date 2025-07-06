@@ -9,8 +9,9 @@ import fitz
 import pytesseract
 from pdf2image import convert_from_bytes
 from PIL import Image
+import subprocess
 
-# MoviePy 2.x+ import (no moviepy.editor)
+# For MoviePy 2.x+ (no moviepy.editor)
 from moviepy.video.io.VideoFileClip import VideoFileClip
 
 # --- CONFIG ---
@@ -19,6 +20,18 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
 if not ASSEMBLYAI_API_KEY:
     st.error("Please set your ASSEMBLYAI_API_KEY in your environment variables.")
+    st.stop()
+
+# --- ffmpeg check ---
+def check_ffmpeg():
+    try:
+        subprocess.run(["ffmpeg", "-version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return True
+    except Exception:
+        return False
+
+if not check_ffmpeg():
+    st.error("ffmpeg is not installed or not found in PATH. Please install ffmpeg on your server for video/audio extraction.")
     st.stop()
 
 # --- Helpers ---
@@ -77,14 +90,12 @@ def extract_audio_from_video(video_file_path, audio_ext=".wav"):
         audio_path = temp_audio.name
     try:
         with VideoFileClip(video_file_path) as video:
-            audio = video.audio
-            if audio is None:
-                return None
-            audio.write_audiofile(audio_path)
-            audio.close()
+            if video.audio is None:
+                raise Exception("No audio stream found in the video. Please upload a video with an audio track.")
+            video.audio.write_audiofile(audio_path)
         return audio_path
     except Exception as e:
-        return None
+        return f"[Audio extraction failed: {e}]"
 
 def extract_text_from_file(uploaded_file):
     parsed = ""
@@ -95,9 +106,9 @@ def extract_text_from_file(uploaded_file):
             temp_video.flush()
             temp_video_path = temp_video.name
         audio_path = extract_audio_from_video(temp_video_path)
-        if not audio_path:
+        if not audio_path or audio_path.startswith("[Audio extraction failed"):
             os.remove(temp_video_path)
-            return "[Error extracting audio from video]"
+            return audio_path  # Return error message
         st.info("Transcribing extracted audio...")
         parsed = transcribe_with_assemblyai_from_path(audio_path)
         os.remove(temp_video_path)
@@ -183,7 +194,7 @@ if uploaded_files:
         st.write(f"**File:** {uploaded_file.name}")
         try:
             parsed = extract_text_from_file(uploaded_file)
-            if parsed.strip():
+            if parsed and not parsed.startswith("[Audio extraction failed") and parsed.strip():
                 parsed_segments.append(f"[{uploaded_file.name}]\n{parsed}")
                 with st.expander(f"Preview: {uploaded_file.name}"):
                     st.text(parsed[:2000])
@@ -195,7 +206,7 @@ if uploaded_files:
                     docx_file = save_docx(parsed, filename="transcript.docx")
                     st.download_button("Download Transcript (.docx)", docx_file, file_name="transcript.docx")
             else:
-                st.warning(f"⚠️ Nothing extractable from: {uploaded_file.name}")
+                st.warning(f"⚠️ Nothing extractable from: {uploaded_file.name}\n{parsed if parsed else ''}")
         except Exception as e:
             st.error(f"❌ Error processing {uploaded_file.name}: {e}")
 
@@ -210,4 +221,5 @@ if parsed_segments:
             st.download_button("Download Facts (.docx)", docx_file, file_name="facts.docx")
         else:
             st.error(facts)
+
 
