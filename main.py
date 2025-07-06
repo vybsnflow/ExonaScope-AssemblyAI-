@@ -10,6 +10,9 @@ import pytesseract
 from pdf2image import convert_from_bytes
 from PIL import Image
 
+# --- NEW: For video/audio extraction ---
+from moviepy.editor import VideoFileClip
+
 # --- CONFIG ---
 ASSEMBLYAI_API_KEY = os.environ.get("ASSEMBLYAI_API_KEY")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -31,7 +34,6 @@ def transcribe_with_assemblyai_from_path(filepath):
     if upload_response.status_code != 200:
         return "[Upload Error: {}]".format(upload_response.text)
     upload_url = upload_response.json()["upload_url"]
-
     transcript_response = requests.post(
         "https://api.assemblyai.com/v2/transcript",
         headers=headers,
@@ -40,7 +42,6 @@ def transcribe_with_assemblyai_from_path(filepath):
     if transcript_response.status_code != 200:
         return "[Start Error: {}]".format(transcript_response.text)
     transcript_id = transcript_response.json()["id"]
-
     for _ in range(60):
         poll_response = requests.get(
             f"https://api.assemblyai.com/v2/transcript/{transcript_id}",
@@ -70,9 +71,38 @@ def run_ocr_on_pdf(file):
 def parse_docx(file):
     return "\n".join([p.text for p in Document(file).paragraphs])
 
+# --- NEW: Extract audio from video ---
+def extract_audio_from_video(video_file, audio_ext=".wav"):
+    with tempfile.NamedTemporaryFile(delete=False, suffix=audio_ext) as temp_audio:
+        audio_path = temp_audio.name
+    try:
+        video = VideoFileClip(video_file)
+        audio = video.audio
+        audio.write_audiofile(audio_path)
+        audio.close()
+        video.close()
+        return audio_path
+    except Exception as e:
+        return None
+
 def extract_text_from_file(uploaded_file):
     parsed = ""
-    if "pdf" in uploaded_file.type:
+    # --- NEW: Video file support ---
+    if uploaded_file.type.startswith("video/") or uploaded_file.name.lower().endswith((".mp4", ".avi", ".mkv", ".mov")):
+        st.info("Extracting audio from video...")
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_video:
+            temp_video.write(uploaded_file.read())
+            temp_video.flush()
+            temp_video_path = temp_video.name
+        audio_path = extract_audio_from_video(temp_video_path)
+        if not audio_path:
+            os.remove(temp_video_path)
+            return "[Error extracting audio from video]"
+        st.info("Transcribing extracted audio...")
+        parsed = transcribe_with_assemblyai_from_path(audio_path)
+        os.remove(temp_video_path)
+        os.remove(audio_path)
+    elif "pdf" in uploaded_file.type:
         parsed = parse_pdf_text(uploaded_file)
         if not parsed.strip():
             st.info("No embedded text, running OCR...")
@@ -113,8 +143,8 @@ def extract_facts_with_gpt_chunked(full_text, case_name, case_number, chunk_size
 
 CASE NAME: {case_name}
 CASE NUMBER: {case_number}
-
 SOURCE MATERIAL (PART {idx+1} of {len(chunks)}):
+
 {chunk}
 """
         with st.spinner(f"Extracting facts from chunk {idx+1} of {len(chunks)}..."):
@@ -134,19 +164,20 @@ SOURCE MATERIAL (PART {idx+1} of {len(chunks)}):
     return "\n\n".join(all_facts)
 
 # --- UI ---
+
 st.title("ExonaScope Phase 1 – Upload, Transcribe, Extract Facts")
 
 case_name = st.text_input("Case Name")
 case_number = st.text_input("Case Number")
 
+# --- NEW: Add video file types to uploader ---
 uploaded_files = st.file_uploader(
-    "Upload PDFs, DOCX, or audio files",
-    type=["pdf", "docx", "mp3", "wav", "m4a"],
+    "Upload PDFs, DOCX, audio, or video files",
+    type=["pdf", "docx", "mp3", "wav", "m4a", "mp4", "avi", "mkv", "mov"],
     accept_multiple_files=True
 )
 
 parsed_segments = []
-
 if uploaded_files:
     st.subheader("📄 Parsed Preview")
     for uploaded_file in uploaded_files:
@@ -157,8 +188,11 @@ if uploaded_files:
                 parsed_segments.append(f"[{uploaded_file.name}]\n{parsed}")
                 with st.expander(f"Preview: {uploaded_file.name}"):
                     st.text(parsed[:2000])
-                # Download transcript if audio
-                if ("audio" in uploaded_file.type or uploaded_file.type.startswith("audio/")) and not parsed.startswith("["):
+                # Download transcript if audio or video
+                if (
+                    ("audio" in uploaded_file.type or uploaded_file.type.startswith("audio/")) or
+                    (uploaded_file.type.startswith("video/") or uploaded_file.name.lower().endswith((".mp4", ".avi", ".mkv", ".mov")))
+                ) and not parsed.startswith("["):
                     docx_file = save_docx(parsed, filename="transcript.docx")
                     st.download_button("Download Transcript (.docx)", docx_file, file_name="transcript.docx")
             else:
@@ -177,4 +211,5 @@ if parsed_segments:
             st.download_button("Download Facts (.docx)", docx_file, file_name="facts.docx")
         else:
             st.error(facts)
+
 
