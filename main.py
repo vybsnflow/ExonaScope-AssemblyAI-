@@ -10,8 +10,8 @@ import pytesseract
 from pdf2image import convert_from_bytes
 from PIL import Image
 
-# --- NEW: For video/audio extraction ---
-from moviepy.editor import VideoFileClip
+# MoviePy 2.x+ import (no moviepy.editor)
+from moviepy.video.io.VideoFileClip import VideoFileClip
 
 # --- CONFIG ---
 ASSEMBLYAI_API_KEY = os.environ.get("ASSEMBLYAI_API_KEY")
@@ -71,23 +71,23 @@ def run_ocr_on_pdf(file):
 def parse_docx(file):
     return "\n".join([p.text for p in Document(file).paragraphs])
 
-# --- NEW: Extract audio from video ---
-def extract_audio_from_video(video_file, audio_ext=".wav"):
+# --- Extract audio from video (MoviePy 2.x+) ---
+def extract_audio_from_video(video_file_path, audio_ext=".wav"):
     with tempfile.NamedTemporaryFile(delete=False, suffix=audio_ext) as temp_audio:
         audio_path = temp_audio.name
     try:
-        video = VideoFileClip(video_file)
-        audio = video.audio
-        audio.write_audiofile(audio_path)
-        audio.close()
-        video.close()
+        with VideoFileClip(video_file_path) as video:
+            audio = video.audio
+            if audio is None:
+                return None
+            audio.write_audiofile(audio_path)
+            audio.close()
         return audio_path
     except Exception as e:
         return None
 
 def extract_text_from_file(uploaded_file):
     parsed = ""
-    # --- NEW: Video file support ---
     if uploaded_file.type.startswith("video/") or uploaded_file.name.lower().endswith((".mp4", ".avi", ".mkv", ".mov")):
         st.info("Extracting audio from video...")
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_video:
@@ -170,7 +170,6 @@ st.title("ExonaScope Phase 1 – Upload, Transcribe, Extract Facts")
 case_name = st.text_input("Case Name")
 case_number = st.text_input("Case Number")
 
-# --- NEW: Add video file types to uploader ---
 uploaded_files = st.file_uploader(
     "Upload PDFs, DOCX, audio, or video files",
     type=["pdf", "docx", "mp3", "wav", "m4a", "mp4", "avi", "mkv", "mov"],
@@ -211,5 +210,4 @@ if parsed_segments:
             st.download_button("Download Facts (.docx)", docx_file, file_name="facts.docx")
         else:
             st.error(facts)
-
 
