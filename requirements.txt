@@ -6,6 +6,10 @@ pytesseract
 pdf2image
 Pillow
 requests
+docx
+fitz
+fpdf
 streamlit-option-menu
-moviepy
+moviepy>=2.0.0
 assemblyai
+
