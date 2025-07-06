@@ -221,4 +221,3 @@ if parsed_segments:
             st.download_button("Download Facts (.docx)", docx_file, file_name="facts.docx")
         else:
             st.error(facts)
-
