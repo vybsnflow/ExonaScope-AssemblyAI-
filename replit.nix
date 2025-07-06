@@ -7,5 +7,6 @@
     pkgs.ffmpeg
     pkgs.pkg-config
     pkgs.zlib
+    pkgs.moviepy
   ];
 }
