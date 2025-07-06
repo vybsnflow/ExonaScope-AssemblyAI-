@@ -7,3 +7,5 @@ pdf2image
 Pillow
 requests
 streamlit-option-menu
+moviepy
+assemblyai
