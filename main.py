@@ -1,3 +1,4 @@
+
 import streamlit as st
 import os
 import tempfile
@@ -10,8 +11,7 @@ import pytesseract
 from pdf2image import convert_from_bytes
 from PIL import Image
 import subprocess
-
-# For MoviePy 2.x+ (no moviepy.editor)
+import mimetypes
 from moviepy.video.io.VideoFileClip import VideoFileClip
 
 # --- CONFIG ---
@@ -22,51 +22,71 @@ if not ASSEMBLYAI_API_KEY:
     st.error("Please set your ASSEMBLYAI_API_KEY in your environment variables.")
     st.stop()
 
-# --- ffmpeg check ---
-def check_ffmpeg():
-    try:
-        subprocess.run(["ffmpeg", "-version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        return True
-    except Exception:
-        return False
-
-if not check_ffmpeg():
-    st.error("ffmpeg is not installed or not found in PATH. Please install ffmpeg on your server for video/audio extraction.")
-    st.stop()
-
-# --- Helpers ---
-
 def transcribe_with_assemblyai_from_path(filepath):
     headers = {"authorization": ASSEMBLYAI_API_KEY}
     with open(filepath, "rb") as f:
-        upload_response = requests.post(
-            "https://api.assemblyai.com/v2/upload",
-            headers=headers,
-            files={"file": f}
-        )
+        upload_response = requests.post("https://api.assemblyai.com/v2/upload", headers=headers, files={"file": f})
     if upload_response.status_code != 200:
-        return "[Upload Error: {}]".format(upload_response.text)
+        return f"[Upload Error: {upload_response.text}]"
     upload_url = upload_response.json()["upload_url"]
-    transcript_response = requests.post(
-        "https://api.assemblyai.com/v2/transcript",
-        headers=headers,
-        json={"audio_url": upload_url}
-    )
+    transcript_response = requests.post("https://api.assemblyai.com/v2/transcript", headers=headers, json={"audio_url": upload_url})
     if transcript_response.status_code != 200:
-        return "[Start Error: {}]".format(transcript_response.text)
+        return f"[Start Error: {transcript_response.text}]"
     transcript_id = transcript_response.json()["id"]
     for _ in range(60):
-        poll_response = requests.get(
-            f"https://api.assemblyai.com/v2/transcript/{transcript_id}",
-            headers=headers
-        )
+        poll_response = requests.get(f"https://api.assemblyai.com/v2/transcript/{transcript_id}", headers=headers)
         status = poll_response.json()["status"]
         if status == "completed":
             return poll_response.json()["text"]
         elif status == "error":
-            return "[Transcription Error: {}]".format(poll_response.json()["error"])
+            return f"[Transcription Error: {poll_response.json()['error']}]"
         time.sleep(3)
     return "[Timeout waiting for transcription]"
+
+def has_audio_track(video_path):
+    cmd = ["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0", video_path]
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return result.stdout.strip() != b''
+
+def extract_audio_from_video(video_file_path, audio_ext=".wav"):
+    with tempfile.NamedTemporaryFile(delete=False, suffix=audio_ext) as temp_audio:
+        audio_path = temp_audio.name
+    try:
+        with VideoFileClip(video_file_path) as video:
+            if video.audio is None:
+                raise Exception("No audio stream found in the video.")
+            video.audio.write_audiofile(audio_path, codec='pcm_s16le', fps=16000, nbytes=2)
+        if not os.path.exists(audio_path):
+            raise FileNotFoundError(f"Audio file not found: {audio_path}")
+        return audio_path
+    except Exception as e:
+        return f"[Audio extraction failed: {e}]"
+
+def fallback_extract_with_ffmpeg(video_file_path, output_audio_path):
+    command = ["ffmpeg", "-y", "-i", video_file_path, "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", output_audio_path]
+    try:
+        subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return output_audio_path
+    except subprocess.CalledProcessError as e:
+        return f"[FFmpeg fallback failed: {e.stderr.decode()}]"
+
+def reencode_audio_to_pcm_wav(input_path):
+    reencoded_path = input_path.replace(".wav", "_fixed.wav")
+    command = ["ffmpeg", "-y", "-i", input_path, "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", reencoded_path]
+    try:
+        subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return reencoded_path
+    except subprocess.CalledProcessError as e:
+        return f"[Re-encode failed: {e.stderr.decode()}]"
+
+def convert_wav_to_mp3(input_path):
+    mp3_path = input_path.replace(".wav", ".mp3")
+    command = ["ffmpeg", "-y", "-i", input_path, "-acodec", "libmp3lame", "-ar", "16000", "-ac", "1", mp3_path]
+    try:
+        subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return mp3_path
+    except subprocess.CalledProcessError as e:
+        return f"[MP3 conversion failed: {e.stderr.decode()}]"
 
 def parse_pdf_text(file):
     file.seek(0)
@@ -84,35 +104,48 @@ def run_ocr_on_pdf(file):
 def parse_docx(file):
     return "\n".join([p.text for p in Document(file).paragraphs])
 
-# --- Extract audio from video (MoviePy 2.x+) ---
-def extract_audio_from_video(video_file_path, audio_ext=".wav"):
-    with tempfile.NamedTemporaryFile(delete=False, suffix=audio_ext) as temp_audio:
-        audio_path = temp_audio.name
-    try:
-        with VideoFileClip(video_file_path) as video:
-            if video.audio is None:
-                raise Exception("No audio stream found in the video. Please upload a video with an audio track.")
-            video.audio.write_audiofile(audio_path)
-        return audio_path
-    except Exception as e:
-        return f"[Audio extraction failed: {e}]"
-
 def extract_text_from_file(uploaded_file):
     parsed = ""
+    temp_paths = []
     if uploaded_file.type.startswith("video/") or uploaded_file.name.lower().endswith((".mp4", ".avi", ".mkv", ".mov")):
         st.info("Extracting audio from video...")
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_video:
-            temp_video.write(uploaded_file.read())
+            video_bytes = uploaded_file.read()
+            temp_video.write(video_bytes)
             temp_video.flush()
+            os.fsync(temp_video.fileno())
             temp_video_path = temp_video.name
+            temp_paths.append(temp_video_path)
+
+        if not has_audio_track(temp_video_path):
+            return "[Error: No audio stream detected.]"
+
         audio_path = extract_audio_from_video(temp_video_path)
-        if not audio_path or audio_path.startswith("[Audio extraction failed"):
-            os.remove(temp_video_path)
-            return audio_path  # Return error message
-        st.info("Transcribing extracted audio...")
-        parsed = transcribe_with_assemblyai_from_path(audio_path)
-        os.remove(temp_video_path)
-        os.remove(audio_path)
+        if isinstance(audio_path, str) and audio_path.startswith("[Audio extraction failed"):
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_fallback:
+                fallback_path = temp_fallback.name
+            audio_path = fallback_extract_with_ffmpeg(temp_video_path, fallback_path)
+            temp_paths.append(fallback_path)
+        temp_paths.append(audio_path)
+
+        if not os.path.exists(audio_path) or os.path.getsize(audio_path) == 0:
+            return "[Transcription Error: Extracted audio file is missing or empty.]"
+
+        fixed_wav_path = reencode_audio_to_pcm_wav(audio_path)
+        mp3_path = convert_wav_to_mp3(fixed_wav_path)
+        temp_paths.extend([fixed_wav_path, mp3_path])
+
+        mime, _ = mimetypes.guess_type(mp3_path)
+        st.audio(mp3_path)
+        st.write(f"🧪 Uploading: {mp3_path} | MIME: {mime} | Size: {os.path.getsize(mp3_path)} bytes")
+
+        st.info("Transcribing re-encoded MP3 audio...")
+        parsed = transcribe_with_assemblyai_from_path(mp3_path)
+
+        for path in temp_paths:
+            if os.path.exists(path):
+                os.remove(path)
+
     elif "pdf" in uploaded_file.type:
         parsed = parse_pdf_text(uploaded_file)
         if not parsed.strip():
@@ -175,17 +208,10 @@ SOURCE MATERIAL (PART {idx+1} of {len(chunks)}):
     return "\n\n".join(all_facts)
 
 # --- UI ---
-
 st.title("ExonaScope Phase 1 – Upload, Transcribe, Extract Facts")
-
 case_name = st.text_input("Case Name")
 case_number = st.text_input("Case Number")
-
-uploaded_files = st.file_uploader(
-    "Upload PDFs, DOCX, audio, or video files",
-    type=["pdf", "docx", "mp3", "wav", "m4a", "mp4", "avi", "mkv", "mov"],
-    accept_multiple_files=True
-)
+uploaded_files = st.file_uploader("Upload PDFs, DOCX, audio, or video files", type=["pdf", "docx", "mp3", "wav", "m4a", "mp4", "avi", "mkv", "mov"], accept_multiple_files=True)
 
 parsed_segments = []
 if uploaded_files:
@@ -194,11 +220,10 @@ if uploaded_files:
         st.write(f"**File:** {uploaded_file.name}")
         try:
             parsed = extract_text_from_file(uploaded_file)
-            if parsed and not parsed.startswith("[Audio extraction failed") and parsed.strip():
+            if parsed.strip():
                 parsed_segments.append(f"[{uploaded_file.name}]\n{parsed}")
                 with st.expander(f"Preview: {uploaded_file.name}"):
                     st.text(parsed[:2000])
-                # Download transcript if audio or video
                 if (
                     ("audio" in uploaded_file.type or uploaded_file.type.startswith("audio/")) or
                     (uploaded_file.type.startswith("video/") or uploaded_file.name.lower().endswith((".mp4", ".avi", ".mkv", ".mov")))
@@ -206,7 +231,7 @@ if uploaded_files:
                     docx_file = save_docx(parsed, filename="transcript.docx")
                     st.download_button("Download Transcript (.docx)", docx_file, file_name="transcript.docx")
             else:
-                st.warning(f"⚠️ Nothing extractable from: {uploaded_file.name}\n{parsed if parsed else ''}")
+                st.warning(f"⚠️ Nothing extractable from: {uploaded_file.name}")
         except Exception as e:
             st.error(f"❌ Error processing {uploaded_file.name}: {e}")
 
@@ -221,3 +246,15 @@ if parsed_segments:
             st.download_button("Download Facts (.docx)", docx_file, file_name="facts.docx")
         else:
             st.error(facts)
+if st.button("Continue to Legal Analysis in Phase 2"):
+    st.session_state["case_name"] = case_name
+    st.session_state["case_number"] = case_number
+
+    if 'parsed_segments' in locals() and parsed_segments:
+        st.session_state["handoff_facts"] = "\n\n".join(parsed_segments)
+    else:
+        st.warning("No facts parsed to send.")
+        st.stop()
+
+    st.switch_page("pages/ExonaScope_Phase2")  # ✅ match the filename in the pages/ folder
+
