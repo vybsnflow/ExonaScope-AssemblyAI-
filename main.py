@@ -246,15 +246,11 @@ if parsed_segments:
             st.download_button("Download Facts (.docx)", docx_file, file_name="facts.docx")
         else:
             st.error(facts)
+            
 if st.button("Continue to Legal Analysis in Phase 2"):
     st.session_state["case_name"] = case_name
     st.session_state["case_number"] = case_number
+    st.session_state["handoff_facts"] = "\n\n".join(parsed_segments)
+    st.switch_page("pages/ExonaScope_Phase2.py")  # ✅ with .py extension
 
-    if 'parsed_segments' in locals() and parsed_segments:
-        st.session_state["handoff_facts"] = "\n\n".join(parsed_segments)
-    else:
-        st.warning("No facts parsed to send.")
-        st.stop()
-
-    st.switch_page("pages/ExonaScope_Phase2")  # ✅ match the filename in the pages/ folder
 
