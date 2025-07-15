@@ -1,107 +1,53 @@
-# ExonaScope Phase 2 – Legal Tagging, Issue Spotting, and Motion Drafting (with CourtListener integration)
-
 import streamlit as st
-import requests
 import json
 from docx import Document
 from io import BytesIO
 import os
 
-# -------------------- SECTION 1: Legal Tagging --------------------
-def tag_legal_events(facts: str):
-    prompt = f"""
-You are a legal tagging assistant. Classify each factual statement below using the following categories only:
-Traffic Stop, Investigative Detention, Search (Consent/Warrant/No Consent), Arrest, Interrogation, Miranda Warning, 
-Statement (Incriminating/Exculpatory), Use of Force, Seizure of Property, Probable Cause Determination.
+# --- User Input Section ---
+st.title("ExonaScope Phase 2 – Fact & Issue Collection")
 
-Return a JSON list: [ {{"fact": ..., "tag": ...}}, ... ]
+# Collect case information
+case_name = st.text_input("Case Name", value=st.session_state.get("case_name", ""))
+case_number = st.text_input("Case Number", value=st.session_state.get("case_number", ""))
 
-FACTS:
-{facts}
-"""
-    return gpt_call(prompt)
+# Collect raw facts and tagged events
+facts = st.text_area("Enter Raw Facts", value=st.session_state.get("phase2_facts", ""), height=150)
+tags = st.text_area("Enter Tagged Legal Events", value=st.session_state.get("phase2_tags", ""), height=100)
 
-# -------------------- SECTION 2: Issue & Defense Spotting --------------------
-def analyze_legal_issues_and_defenses(tagged_json):
-    prompt = f"""
-You are a criminal defense legal analyst. Based on the tagged events below, identify:
+# Collect suppression issues
+st.subheader("Suppression Issues")
+if "phase2_issues" not in st.session_state:
+    st.session_state["phase2_issues"] = []
+if st.button("Add Suppression Issue"):
+    st.session_state["phase2_issues"].append({"title": "", "explanation": ""})
 
-A. Potential Constitutional or Procedural Issues (e.g., unlawful stop, Miranda violation, illegal search)
-B. Potential Legal Defenses (e.g., self-defense, duress, alibi, mistaken identity, lack of intent)
+for i, issue in enumerate(st.session_state["phase2_issues"]):
+    st.session_state["phase2_issues"][i]["title"] = st.text_input(f"Issue {i+1} Title", value=issue["title"], key=f"issue_title_{i}")
+    st.session_state["phase2_issues"][i]["explanation"] = st.text_area(f"Issue {i+1} Explanation", value=issue["explanation"], key=f"issue_expl_{i}")
 
-Output in this format:
-{{
-  "legal_issues": [...],
-  "possible_defenses": [...]
-}}
+# Collect defenses
+st.subheader("Potential Defenses")
+if "phase2_defenses" not in st.session_state:
+    st.session_state["phase2_defenses"] = []
+if st.button("Add Defense"):
+    st.session_state["phase2_defenses"].append({"title": "", "explanation": ""})
 
-TAGGED EVENTS:
-{tagged_json}
-"""
-    return gpt_call(prompt)
+for j, defense in enumerate(st.session_state["phase2_defenses"]):
+    st.session_state["phase2_defenses"][j]["title"] = st.text_input(f"Defense {j+1} Title", value=defense["title"], key=f"defense_title_{j}")
+    st.session_state["phase2_defenses"][j]["explanation"] = st.text_area(f"Defense {j+1} Explanation", value=defense["explanation"], key=f"defense_expl_{j}")
 
-# -------------------- SECTION 3: Caselaw Lookup via CourtListener --------------------
-API_URL = "https://www.courtlistener.com/api/rest/v3/opinions/"
+# Save all data to session state
+st.session_state["case_name"] = case_name
+st.session_state["case_number"] = case_number
+st.session_state["phase2_facts"] = facts
+st.session_state["phase2_tags"] = tags
 
-def get_cases_for_issue(issue_tag: str, jurisdiction: str = "vi", limit=3):
-    params = {
-        "q": issue_tag,
-        "jurisdiction": jurisdiction,
-        "page_size": limit,
-        "order_by": "-date_filed"
-    }
-    response = requests.get(API_URL, params=params)
-    results = []
-    if response.status_code == 200:
-        data = response.json()
-        for result in data.get("results", []):
-            results.append({
-                "name": result.get("case_name"),
-                "citation": result.get("citations", [{}])[0].get("cite"),
-                "court": result.get("court", {}).get("name"),
-                "url": result.get("absolute_url")
-            })
-    return results
-
-# -------------------- SECTION 4: Motion Drafting --------------------
-def draft_motion(case_name, case_number, facts, issues, defenses, caselaw, motion_type):
-    template = {
-        "suppress_statements": "Motion to Suppress Statements",
-        "suppress_evidence": "Motion to Suppress Physical Evidence",
-        "dismiss_case": "Motion to Dismiss Case",
-    }.get(motion_type, "Motion to Suppress")
-
-    jurisdiction_language = {
-        "vi": "Pursuant to the Revised Organic Act and Title 5 of the Virgin Islands Code...",
-        "3rd": "Under precedents from the Third Circuit Court of Appeals...",
-        "default": "Under established federal constitutional principles..."
-    }.get(jurisdiction, jurisdiction_language["default"])
-
-    prompt = f"""
-You are a defense attorney drafting a {template} for:
-CASE: {case_name}\nCASE NO.: {case_number}
-
-FACTS:
-{facts}
-
-LEGAL ISSUES:
-{json.dumps(issues, indent=2)}
-DEFENSES:
-{json.dumps(defenses, indent=2)}
-
-You may ONLY cite the following verified cases:
-{json.dumps(caselaw, indent=2)}
-
-Include a signature block and an audit disclaimer that this document was AI-assisted.
-Start the argument with: {jurisdiction_language}
-"""
-    return gpt_call(prompt)
-
-# -------------------- SECTION 5: GPT Wrapper --------------------
+# --- Summarize Facts for Motion ---
 def gpt_call(prompt):
-    import openai
-    openai.api_key = st.secrets["OPENAI_API_KEY"]
-    response = openai.ChatCompletion.create(
+    from openai import OpenAI
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    response = client.chat.completions.create(
         model="gpt-4o",
         messages=[
             {"role": "system", "content": "You are a precise legal assistant."},
@@ -110,90 +56,56 @@ def gpt_call(prompt):
     )
     return response.choices[0].message.content
 
-# -------------------- SECTION 6: Whisper-Based Transcription --------------------
-def transcribe_with_whisper(audio_path):
-    import openai
-    openai.api_key = st.secrets["OPENAI_API_KEY"]
-    audio_file = open(audio_path, "rb")
-    transcript = openai.Audio.transcribe("whisper-1", audio_file)
-    return transcript["text"]
+def summarize_facts_for_motion(raw_facts, tagged_events):
+    prompt = f"""
+You are a legal writing assistant. Given the following raw facts and tagged legal events, write a concise, professional, and neutral summary of the facts suitable for the 'Statement of Facts' section of a legal motion. Focus on clarity, chronology, and relevance to the legal issues.
 
-# -------------------- SECTION 7: Save/Load Case History --------------------
-CASE_HISTORY_FILE = "case_history.json"
+Raw Facts:
+{raw_facts}
 
-def save_case_to_history(case_name, case_number, facts, issues, defenses, motion):
-    case_data = {
-        "case_name": case_name,
-        "case_number": case_number,
-        "facts": facts,
-        "issues": issues,
-        "defenses": defenses,
-        "motion": motion
+Tagged Events:
+{tagged_events}
+
+Return only the summarized facts, in narrative paragraph form.
+"""
+    return gpt_call(prompt)
+
+if st.button("Summarize Facts for Motion"):
+    with st.spinner("Summarizing facts for motion..."):
+        summarized_facts = summarize_facts_for_motion(facts, tags)
+    st.session_state["motion_facts"] = summarized_facts
+
+# Display and allow editing of the summarized facts
+if "motion_facts" in st.session_state:
+    st.header("Summarized Facts for Motion")
+    summarized_facts_editable = st.text_area(
+        "Edit the summarized facts if needed:",
+        value=st.session_state["motion_facts"],
+        height=200,
+        key="summarized_facts_editable"
+    )
+    st.session_state["motion_facts"] = summarized_facts_editable
+
+# --- Push to Phase 3 (Save Data to File) ---
+if st.button("Push to Phase 3"):
+    data = {
+        "case_name": st.session_state.get("case_name", ""),
+        "case_number": st.session_state.get("case_number", ""),
+        "phase2_facts": st.session_state.get("phase2_facts", ""),
+        "phase2_tags": st.session_state.get("phase2_tags", ""),
+        "phase2_issues": st.session_state.get("phase2_issues", []),
+        "phase2_defenses": st.session_state.get("phase2_defenses", []),
+        "motion_facts": st.session_state.get("motion_facts", "")
     }
-    if os.path.exists(CASE_HISTORY_FILE):
-        with open(CASE_HISTORY_FILE, "r") as f:
-            history = json.load(f)
-    else:
-        history = []
-    history.append(case_data)
-    with open(CASE_HISTORY_FILE, "w") as f:
-        json.dump(history, f, indent=2)
+    json_bytes = json.dumps(data, indent=2).encode("utf-8")
+    st.download_button(
+        label="Download Data for Phase 3",
+        data=json_bytes,
+        file_name="phase2_to_phase3.json",
+        mime="application/json"
+    )
+    st.success("Data prepared! Download and upload this file in Phase 3.")
 
-def load_case_history():
-    if os.path.exists(CASE_HISTORY_FILE):
-        with open(CASE_HISTORY_FILE, "r") as f:
-            return json.load(f)
-    return []
-
-# -------------------- SECTION 8: Streamlit Interface --------------------
-st.title("ExonaScope Phase 2 – Legal Analysis & Motion Builder")
-
-case_name = st.text_input("Case Name")
-case_number = st.text_input("Case Number")
-audio_file = st.file_uploader("(Optional) Upload audio to transcribe via Whisper", type=["mp3", "wav", "m4a"])
-if audio_file:
-    with open("temp_audio", "wb") as f:
-        f.write(audio_file.read())
-    with st.spinner("Transcribing audio..."):
-        facts = transcribe_with_whisper("temp_audio")
-else:
-    facts = st.text_area("Paste Extracted Facts from Phase 1", height=300)
-
-motion_type = st.selectbox("Motion Type", ["suppress_statements", "suppress_evidence", "dismiss_case"])
-jurisdiction = st.text_input("Jurisdiction Code (e.g., 'vi' for Virgin Islands)", value="vi")
-
-if st.button("🔍 Analyze Case"):
-    with st.spinner("Tagging legal events..."):
-        tags = tag_legal_events(facts)
-    tags_editable = st.text_area("📝 Edit/Reclassify Tagged Events (JSON)", value=tags, height=200)
-
-    with st.spinner("Spotting issues and defenses..."):
-        analysis = analyze_legal_issues_and_defenses(tags_editable)
-    st.code(analysis, language="json")
-
-    with st.spinner("Fetching caselaw for issues..."):
-        parsed = json.loads(analysis)
-        issues = parsed.get("legal_issues", [])
-        defenses = parsed.get("possible_defenses", [])
-        case_refs = []
-        for issue in issues:
-            case_refs.extend(get_cases_for_issue(issue, jurisdiction=jurisdiction))
-    st.code(case_refs, language="json")
-
-    with st.spinner("Drafting motion to suppress..."):
-        motion = draft_motion(case_name, case_number, facts, issues, defenses, case_refs, motion_type)
-    st.text_area("📄 Motion to Suppress", motion, height=400)
-    docx_bytes = BytesIO()
-    Document().add_paragraph(motion).save(docx_bytes)
-    docx_bytes.seek(0)
-    st.download_button("Download Motion (.docx)", docx_bytes, file_name="motion_to_suppress.docx")
-
-    save_case_to_history(case_name, case_number, facts, issues, defenses, motion)
-
-if st.checkbox("📚 Load Previous Cases"):
-    history = load_case_history()
-    for i, item in enumerate(history):
-        st.markdown(f"**{item['case_name']} ({item['case_number']})**")
-        with st.expander("View Summary"):
-            st.text_area("Facts", item["facts"], height=150)
-            st.text_area("Motion", item["motion"], height=200)
+# --- Optional: Show Current Session State for Debugging ---
+if st.checkbox("Show Session State (Debug)"):
+    st.write(dict(st.session_state))
