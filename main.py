@@ -1,4 +1,3 @@
-
 import streamlit as st
 import os
 import tempfile
@@ -21,6 +20,8 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 if not ASSEMBLYAI_API_KEY:
     st.error("Please set your ASSEMBLYAI_API_KEY in your environment variables.")
     st.stop()
+
+# --- Utility Functions ---
 
 def transcribe_with_assemblyai_from_path(filepath):
     headers = {"authorization": ASSEMBLYAI_API_KEY}
@@ -211,12 +212,16 @@ SOURCE MATERIAL (PART {idx+1} of {len(chunks)}):
 st.title("ExonaScope Phase 1 – Upload, Transcribe, Extract Facts")
 case_name = st.text_input("Case Name")
 case_number = st.text_input("Case Number")
-uploaded_files = st.file_uploader("Upload PDFs, DOCX, audio, or video files", type=["pdf", "docx", "mp3", "wav", "m4a", "mp4", "avi", "mkv", "mov"], accept_multiple_files=True)
+uploaded_files = st.file_uploader(
+    "Upload PDFs, DOCX, audio, or video files",
+    type=["pdf", "docx", "mp3", "wav", "m4a", "mp4", "avi", "mkv", "mov"],
+    accept_multiple_files=True
+)
 
 parsed_segments = []
 if uploaded_files:
     st.subheader("📄 Parsed Preview")
-    for uploaded_file in uploaded_files:
+    for idx, uploaded_file in enumerate(uploaded_files):
         st.write(f"**File:** {uploaded_file.name}")
         try:
             parsed = extract_text_from_file(uploaded_file)
@@ -228,48 +233,54 @@ if uploaded_files:
                     ("audio" in uploaded_file.type or uploaded_file.type.startswith("audio/")) or
                     (uploaded_file.type.startswith("video/") or uploaded_file.name.lower().endswith((".mp4", ".avi", ".mkv", ".mov")))
                 ) and not parsed.startswith("["):
-                    docx_file = save_docx(parsed, filename="transcript.docx")
-                    st.download_button("Download Transcript (.docx)", docx_file, file_name="transcript.docx")
+                    docx_file = save_docx(parsed, filename=f"{uploaded_file.name}_transcript.docx")
+                    st.download_button(
+                        f"Download Transcript ({uploaded_file.name})",
+                        docx_file,
+                        file_name=f"{uploaded_file.name}_transcript.docx",
+                        key=f"download_transcript_{idx}"
+                    )
             else:
                 st.warning(f"⚠️ Nothing extractable from: {uploaded_file.name}")
         except Exception as e:
             st.error(f"❌ Error processing {uploaded_file.name}: {e}")
 
+# --- Fact Extraction and Editing ---
 if parsed_segments:
-    if st.button("🧠 Generate Chronological Facts (GPT-4o)"):
+    if st.button("🧠 Generate Chronological Facts (GPT-4o)", key="generate_facts"):
         full_text = "\n\n".join(parsed_segments)
         facts = extract_facts_with_gpt_chunked(full_text, case_name, case_number, chunk_size=4000)
         if facts and not facts.startswith("["):
             st.success("Fact extraction complete!")
-            st.text_area("Facts", facts, height=300)
-            docx_file = save_docx(facts, filename="facts.docx")
-            st.download_button("Download Facts (.docx)", docx_file, file_name="facts.docx")
-        else:
-            st.error(facts)
-            
-# After fact extraction and editing:
-if parsed_segments:
-    if st.button("🧠 Generate Chronological Facts (GPT-4o)"):
-        full_text = "\n\n".join(parsed_segments)
-        facts = extract_facts_with_gpt_chunked(full_text, case_name, case_number, chunk_size=4000)
-        if facts and not facts.startswith("["):
-            st.success("Fact extraction complete!")
-            # Save facts to session state for editing and handoff
             st.session_state["phase2_facts"] = facts
-            facts_editable = st.text_area("Facts", facts, height=300, key="facts_editable")
-            st.session_state["phase2_facts"] = facts_editable
-            docx_file = save_docx(facts_editable, filename="facts.docx")
-            st.download_button("Download Facts (.docx)", docx_file, file_name="facts.docx")
         else:
             st.error(facts)
 
-# Handoff to Phase 2
-if st.button("Continue to Legal Analysis in Phase 2"):
+    # Show editable facts if available
+    if "phase2_facts" in st.session_state and st.session_state["phase2_facts"]:
+        facts_editable = st.text_area(
+            "Facts (edit before continuing to Phase 2):",
+            value=st.session_state["phase2_facts"],
+            height=300,
+            key="facts_editable"
+        )
+        st.session_state["phase2_facts"] = facts_editable
+        docx_file = save_docx(facts_editable, filename="facts.docx")
+        st.download_button(
+            "Download Facts (.docx)",
+            docx_file,
+            file_name="facts.docx",
+            key="download_facts"
+        )
+
+# --- Handoff to Phase 2 ---
+if st.button("Continue to Legal Analysis in Phase 2", key="continue_phase2"):
     st.session_state["case_name"] = case_name
     st.session_state["case_number"] = case_number
-    # Use the facts from session state, not parsed_segments
+    # Ensure facts are present
     st.session_state["phase2_facts"] = st.session_state.get("phase2_facts", "")
-    st.switch_page("pages/ExonaScope_Phase2.py")
+    st.switch_page("pages/ExonaScope_Phase2.py")  # Use the correct path to your Phase 2 script
 
-
-
+# --- Debugging: Show Session State ---
+if st.checkbox("Show Session State (Debug)", key="show_session_state"):
+    st.write(dict(st.session_state))
