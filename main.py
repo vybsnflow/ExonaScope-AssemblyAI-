@@ -247,10 +247,29 @@ if parsed_segments:
         else:
             st.error(facts)
             
+# After fact extraction and editing:
+if parsed_segments:
+    if st.button("🧠 Generate Chronological Facts (GPT-4o)"):
+        full_text = "\n\n".join(parsed_segments)
+        facts = extract_facts_with_gpt_chunked(full_text, case_name, case_number, chunk_size=4000)
+        if facts and not facts.startswith("["):
+            st.success("Fact extraction complete!")
+            # Save facts to session state for editing and handoff
+            st.session_state["phase2_facts"] = facts
+            facts_editable = st.text_area("Facts", facts, height=300, key="facts_editable")
+            st.session_state["phase2_facts"] = facts_editable
+            docx_file = save_docx(facts_editable, filename="facts.docx")
+            st.download_button("Download Facts (.docx)", docx_file, file_name="facts.docx")
+        else:
+            st.error(facts)
+
+# Handoff to Phase 2
 if st.button("Continue to Legal Analysis in Phase 2"):
     st.session_state["case_name"] = case_name
     st.session_state["case_number"] = case_number
-    st.session_state["handoff_facts"] = "\n\n".join(parsed_segments)
-    st.switch_page("pages/ExonaScope_Phase2.py")  # ✅ with .py extension
+    # Use the facts from session state, not parsed_segments
+    st.session_state["phase2_facts"] = st.session_state.get("phase2_facts", "")
+    st.switch_page("pages/ExonaScope_Phase2.py")
+
 
 
