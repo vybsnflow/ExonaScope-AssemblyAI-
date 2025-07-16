@@ -1,205 +1,213 @@
 import streamlit as st
-import requests
-import json
-from docx import Document
 from io import BytesIO
+from docx import Document
+from fpdf import FPDF
 import os
-import logging
-import streamlit as st
-st.write("Session State Contents:", dict(st.session_state))
+import requests
+import re
 
-# --- Setup Logging ---
-logging.basicConfig(level=logging.INFO)
-
-# --- Retrieve Data from Phase 2 ---
-case_name = st.session_state.get("case_name", "")
-case_number = st.session_state.get("case_number", "")
-facts = st.session_state.get("phase2_facts", "")         # This is the Raw Facts
-tags = st.session_state.get("phase2_tags", "")           # Tagged Events
-issues = st.session_state.get("phase2_issues", [])
-defenses = st.session_state.get("phase2_defenses", [])
-
-# Log for debugging
-logging.info(f"✅ Received facts from Phase 2: {facts}")
-logging.info(f"✅ Received tags from Phase 2: {tags}")
-
-# --- GPT Call (OpenAI) ---
-def gpt_call(prompt):
+# --- Elite Argument Generation ---
+def gpt_memo_argument_for_issue(issue, facts, jurisdiction, caselaw_text):
+    api_key = os.getenv("OPENAI_API_KEY")
     from openai import OpenAI
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    client = OpenAI(api_key=api_key)
+    prompt = f"""
+You are a distinguished criminal defense attorney and appellate strategist with 30+ years’ experience. Draft a thorough, internally confidential legal memorandum analyzing the following suppression issue:
+
+Issue: {issue['title']}
+Jurisdiction: {jurisdiction or '[Unknown]'}
+Facts: {facts}
+
+- Provide a rigorous constitutional and legal analysis, integrating practical trial and appellate strategy.
+- Use the following caselaw (quoted or summarized as appropriate):
+
+{caselaw_text}
+
+- Highlight the issue’s complexity, cite relevant controlling or persuasive appellate/Supreme Court cases (formal citations and summaries), and analyze anticipated prosecution counterarguments.
+- Write with the clarity and depth expected of an elite defense practitioner prepping for both trial and review.
+"""
     response = client.chat.completions.create(
         model="gpt-4o",
         messages=[
-            {"role": "system", "content": "You are a precise legal assistant."},
+            {"role": "system", "content": "You are a seasoned defense legal memo writer."},
             {"role": "user", "content": prompt}
         ]
     )
-    return response.choices[0].message.content
+    return response.choices[0].message.content.strip()
 
-# --- Summarize Facts for Motion ---
-def summarize_facts_for_motion(raw_facts, tagged_events):
-    prompt = f"""
-You are a legal writing assistant. Given the following raw facts and tagged legal events, write a concise, professional, and neutral summary of the facts suitable for the 'Statement of Facts' section of a legal motion. Focus on clarity, chronology, and relevance to the legal issues.
-
-Raw Facts:
-{raw_facts}
-
-Tagged Events:
-{tagged_events}
-
-Return only the summarized facts, in narrative paragraph form.
-"""
-    return gpt_call(prompt)
-
-# --- Fetch Real Caselaw from CourtListener ---
-def fetch_caselaw_from_courtlistener(issue, jurisdiction=None, limit=3):
-    headers = {}
+# --- Robust Caselaw Fetch ---
+def fetch_caselaw_from_courtlistener(query, explanation, facts, jurisdiction, appellate_only=True, limit=4):
     params = {
-        "q": issue,
+        "q": f"{query} {explanation} {facts}",
         "type": "o",
         "page_size": limit,
-        "order_by": "-date_filed"
+        "order_by": "-date_filed",
     }
     if jurisdiction:
         params["jurisdiction"] = jurisdiction
-    url = "https://www.courtlistener.com/api/rest/v3/search/"
-    response = requests.get(url, params=params, headers=headers)
-    if response.status_code != 200:
+    if appellate_only:
+        params["court_type"] = "A"
+    try:
+        r = requests.get("https://www.courtlistener.com/api/rest/v3/search/", params=params)
+        r.raise_for_status()
+        data = r.json()
+        results = []
+        for item in data.get("results", []):
+            case_name = item.get("caseName", "") or item.get("case_name", "")
+            citation = item.get("citation", "")
+            court = item.get("court", {}).get("name", "")
+            date = item.get("dateFiled", item.get("date_filed", ""))
+            url = item.get("absolute_url", "")
+            summary = item.get("plain_text", "")
+            if summary:
+                summary = summary[:350].replace("\n", " ") + ("..." if len(summary) > 340 else "")
+            results.append({
+                "case_name": case_name,
+                "citation": citation,
+                "court": court,
+                "date": date,
+                "url": f"https://www.courtlistener.com{url}" if url else "",
+                "summary": summary
+            })
+        return results
+    except Exception:
         return []
-    data = response.json()
-    results = []
-    for result in data.get("results", []):
-        case = {
-            "case_name": result.get("caseName", result.get("case_name", "")),
-            "citation": result.get("citation", ""),
-            "court": result.get("court", {}).get("name", ""),
-            "date": result.get("dateFiled", result.get("date_filed", "")),
-            "url": result.get("absolute_url", "")
-        }
-        results.append(case)
-    return results
 
-# --- Generate Argument for Suppression Issue ---
-def generate_argument_for_issue(issue, facts, caselaw, jurisdiction):
-    caselaw_text = ""
-    for case in caselaw:
-        caselaw_text += f"- {case['case_name']} ({case['citation']}, {case['court']}, {case['date']}): {case['url']}\n"
-    prompt = f"""
-You are a defense attorney drafting a legal argument for a motion to suppress.
-Issue: {issue['title']}
-Facts: {facts}
-Explanation: {issue['explanation']}
-Relevant Caselaw:
-{caselaw_text}
-Jurisdiction: {jurisdiction}
+# --- PDF Export Helper ---
+def text_to_pdf(text, filename="memo.pdf"):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.set_font("Arial", size=12)
+    for line in text.split('\n'):
+        pdf.multi_cell(0, 10, line)
+    pdf_output = BytesIO()
+    pdf.output(pdf_output)
+    pdf_output.seek(0)
+    return pdf_output
 
-Write a detailed, professional legal argument for this issue, referencing the provided facts and caselaw. Cite cases by name and citation.
-"""
-    return gpt_call(prompt)
+# --- Suppression Memo Formatter ---
+def format_suppression_issues_memo(case_name, case_number, facts_summary, issues, issue_caselaw_edits, court="INTERNAL LEGAL MEMO", state=""):
+    memo = []
+    memo.append(f"{court}\n{state}\n\nMemo regarding: {case_name}\nCase Number: {case_number}\n")
+    memo.append("CONFIDENTIAL DEFENSE MEMORANDUM\n" + "="*42 + "\n\n")
+    memo.append("This memorandum analyzes potential bases for suppression of evidence, providing in-depth legal arguments, trial and appellate strategies, and relevant controlling authority for team review. Not for filing without attorney review.\n")
+    memo.append("SUMMARY OF PERTINENT FACTS\n\n" + facts_summary + "\n")
+    memo.append("SUPPRESSION ISSUES ANALYSIS\n")
+    for i, issue in enumerate(issues, 1):
+        memo.append(f"---\n\nISSUE {i}: {issue['title']}\n\n{issue['argument_full']}\n\n{issue_caselaw_edits.get(i, '')}\n")
+    memo.append("\n[End of Memorandum]\n")
+    return "\n".join(memo)
 
-# --- Generate Strategy Memo for Defense ---
-def generate_strategy_for_defense(defense, facts):
-    prompt = f"""
-You are a criminal defense strategist.
-Defense: {defense['title']}
-Facts: {facts}
-Explanation: {defense['explanation']}
+# --- Defense Memo Formatter (unchanged from before) ---
+def format_defense_strategy(case_name, case_number, defenses):
+    output = []
+    output.append(f"# Defense Strategy Memo – {case_name}")
+    output.append(f"**Case Number**: {case_number}\n")
+    for d in defenses:
+        output.append(f"## {d['title']}\n\n{d['explanation']}\n")
+    output.append("*This document is for internal defense team use only.*")
+    return "\n".join(output)
 
-Write a practical strategy memo for this defense. Include recommendations for investigation, evidence, and trial tactics. Do not draft legal arguments or cite caselaw.
-"""
-    return gpt_call(prompt)
+# ==== UI: ExonaScope Memo Mode ====
+case_name = st.session_state.get("case_name", "")
+case_number = st.session_state.get("case_number", "")
+facts = st.session_state.get("phase2_facts", "")
+tags = st.session_state.get("phase2_tags", "")
+issues = st.session_state.get("phase2_issues", [])
+defenses = st.session_state.get("phase2_defenses", [])
+memo_facts = st.session_state.get("motion_facts", "")
+jurisdiction = st.text_input("Jurisdiction Code (e.g., 'ca', 'ny', 'tx')", value="")
+appellate_only = st.checkbox("Appellate Cases Only", value=True)
 
-# --- Streamlit UI ---
-st.title("ExonaScope Phase 3 – Motion Generator & Defense Strategy")
+st.title("ExonaScope Phase 3 – Elite Suppression Issues Memo & Defense Strategy")
 
-jurisdiction = st.text_input("Jurisdiction Code (e.g., 'vi' for Virgin Islands)", value="vi", key="phase3_jurisdiction")
+st.subheader("📂 Case Information")
+st.markdown(f"**Case Name**: {case_name}")
+st.markdown(f"**Case Number**: {case_number}")
 
-st.header("Case Information")
-st.markdown(f"**Case Name:** {case_name}")
-st.markdown(f"**Case Number:** {case_number}")
+# --- Collect arguments and editable caselaw per issue ---
+issue_caselaw_edits = {}
+elite_issues = []
 
-# --- Generate & Display the Summarized Facts ---
-if "motion_facts" not in st.session_state:
-    if facts:
-        with st.spinner("Summarizing facts for motion..."):
-            summarized_facts = summarize_facts_for_motion(facts, tags)
-        st.session_state["motion_facts"] = summarized_facts
-    else:
-        st.error("❌ Facts not found. Please make sure Phase 2 passed 'phase2_facts'.")
+if issues and memo_facts:
+    st.subheader("🧠 AI-Generated Suppression Issues Memo")
+    with st.spinner("Conducting advanced legal research and drafting arguments..."):
+        for idx, issue in enumerate(issues, 1):
+            # Get robust, jurisdiction-specific caselaw
+            caselaw = fetch_caselaw_from_courtlistener(
+                issue['title'], issue['explanation'], facts, jurisdiction, appellate_only=appellate_only, limit=4
+            )
+            caselaw_md = ""
+            if caselaw:
+                for c in caselaw:
+                    citation = f"*{c['case_name']}*, {c['citation']} ({c['court']} {c['date']})"
+                    link = f"[Full Opinion]({c['url']})" if c['url'] else ""
+                    summary = c['summary']
+                    caselaw_md += f"- {citation} {link}\n    {summary}\n"
+            else:
+                caselaw_md = "_No relevant caselaw retrieved. Try varying your jurisdiction or keywords._\n"
+            # Use LLM argument generator with elite-level prompt
+            argument_text = gpt_memo_argument_for_issue(issue, facts, jurisdiction, caselaw_md)
+            issue_caselaw_edits[idx] = st.text_area(
+                f"Edit/Annotate Caselaw for Issue {idx} ({issue['title']})",
+                value=caselaw_md,
+                height=120,
+                key=f"caselaw_edit_{idx}"
+            )
+            elite_issues.append(dict(**issue, argument_full=argument_text))
 
-# Display editable facts summary
-if "motion_facts" in st.session_state:
-    st.header("Summarized Facts for Motion")
-    summarized_facts_editable = st.text_area(
-        "Edit the summarized facts if needed:",
-        value=st.session_state["motion_facts"],
-        height=200,
-        key="summarized_facts_editable"
+    memo_text = format_suppression_issues_memo(
+        case_name, case_number, memo_facts, elite_issues, issue_caselaw_edits
     )
-    st.session_state["motion_facts"] = summarized_facts_editable
+    st.text_area("Memo Preview", value=memo_text, height=500, key="suppression_memo_display")
+
+    # --- Download as DOCX ---
+    docx_bytes = BytesIO()
+    doc = Document()
+    for line in memo_text.split('\n'):
+        doc.add_paragraph(line)
+    doc.save(docx_bytes)
+    docx_bytes.seek(0)
+    st.download_button("📥 Download Suppression Memo (.docx)",
+        data=docx_bytes.getvalue(),
+        file_name="Suppression_Memo.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    # --- Download as PDF ---
+    pdf_bytes = text_to_pdf(memo_text)
+    st.download_button("📄 Download Suppression Memo as PDF",
+        data=pdf_bytes,
+        file_name="Suppression_Memo.pdf",
+        mime="application/pdf")
+
 else:
-    st.warning("⚠️ No summarized facts available to edit.")
+    st.info("Awaiting issues and facts from Phase 2.")
 
-# --- Generate Motion to Suppress ---
-if st.button("Generate Motion to Suppress", key="generate_motion"):
-    motion_sections = []
-    for i, issue in enumerate(issues):
-        st.info(f"Fetching caselaw for: {issue['title']}")
-        caselaw = fetch_caselaw_from_courtlistener(issue['title'], jurisdiction=jurisdiction, limit=3)
-        argument = generate_argument_for_issue(issue, st.session_state["motion_facts"], caselaw, jurisdiction)
-        motion_sections.append(f"## {issue['title']}\n\n{argument}\n")
+# --- Defense Strategy Memo remains accessible/downloadable ---
+if defenses:
+    st.subheader("🛡️ Defense Strategy Memo")
+    defense_text = format_defense_strategy(case_name, case_number, defenses)
+    st.text_area("Strategy Memo Preview", value=defense_text, height=400, key="defense_preview")
 
-    motion_text = (
-        f"# Motion to Suppress\n\n"
-        f"**Case Name:** {case_name}\n"
-        f"**Case Number:** {case_number}\n\n"
-        f"## Statement of Facts\n{st.session_state['motion_facts']}\n\n"
-        f"## Argument\n" + "\n".join(motion_sections) +
-        "\n## Conclusion\nWHEREFORE, the defense respectfully requests that the Court grant the motion to suppress as set forth above.\n\n"
-        "Respectfully submitted,\n\n[Signature Block]\n\n*This document was AI-assisted.*"
-    )
+    docx_defense = BytesIO()
+    doc = Document()
+    for line in defense_text.split("\n"):
+        doc.add_paragraph(line)
+    doc.save(docx_defense)
+    docx_defense.seek(0)
+    st.download_button("📥 Download Defense Memo (.docx)",
+        data=docx_defense.getvalue(),
+        file_name="Defense_Strategy_Memo.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
-    st.subheader("Draft Motion to Suppress")
-    st.text_area("Motion to Suppress", motion_text, height=400, key="motion_text_area")
+    pdf_defense = text_to_pdf(defense_text)
+    st.download_button("📄 Download Defense Memo as PDF",
+        data=pdf_defense,
+        file_name="Defense_Strategy_Memo.pdf",
+        mime="application/pdf")
+else:
+    st.info("No defenses available.")
 
-    # Word download
-    docx_bytes = BytesIO()
-    Document().add_paragraph(motion_text).save(docx_bytes)
-    docx_bytes.seek(0)
-    st.download_button(
-        "Download Motion (.docx)",
-        docx_bytes.getvalue(),
-        file_name="motion_to_suppress.docx",
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        key="download_motion"
-    )
-
-# --- Generate Defense Strategy Memo ---
-if st.button("Generate Defense Strategy Memo", key="generate_defense_strategy"):
-    strategy_sections = []
-    for j, defense in enumerate(defenses):
-        strategy = generate_strategy_for_defense(defense, st.session_state["motion_facts"])
-        strategy_sections.append(f"## {defense['title']}\n\n{strategy}\n")
-
-    strategy_text = (
-        f"# Defense Strategy Memo\n\n"
-        f"**Case Name:** {case_name}\n"
-        f"**Case Number:** {case_number}\n\n"
-        f"## Overview of Defenses\n" + "\n".join(strategy_sections) +
-        "\n*This document was AI-assisted and is for internal defense team use only.*"
-    )
-
-    st.subheader("Defense Strategy Memo")
-    st.text_area("Defense Strategy", strategy_text, height=400, key="defense_text_area")
-
-    docx_bytes = BytesIO()
-    Document().add_paragraph(strategy_text).save(docx_bytes)
-    docx_bytes.seek(0)
-    st.download_button(
-        "Download Defense Strategy (.docx)",
-        docx_bytes.getvalue(),
-        file_name="defense_strategy.docx",
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        key="download_defense"
-    )
+if st.checkbox("🪵 Debug Session State"):
+    st.json(dict(st.session_state))
 
