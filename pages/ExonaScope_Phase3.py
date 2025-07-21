@@ -241,14 +241,24 @@ def text_to_pdf(text):
     try:
         pdf.add_font('CSchoolbook', '', FONT_PATH, uni=True)
         pdf.set_font("CSchoolbook", '', 12)
-    except:
+    except Exception as e:
+        print(f"Error occurred: {e}")
         pdf.set_font("Arial", size=12)
-    for line in text.split('\n'):
+    safe_text = text.replace('\u2013', '-')
+    for line in safe_text.split('\n'):
         pdf.multi_cell(0, 10, line if isinstance(line, str) else str(line))
-    pdf_output = BytesIO()
-    pdf.output(pdf_output)
-    pdf_output.seek(0)
-    return pdf_output
+        pdf_string = pdf.output(dest="S")
+        pdf_bytes = pdf_string  # Direct use of bytearray
+        pdf_output = BytesIO(pdf_bytes)
+
+
+        # Capture the output of the PDF
+        output = pdf.output(dest='S')  # This directly gives a bytearray
+        pdf_output.write(output)
+
+        pdf_output.write(output)
+        pdf_output.seek(0)
+        return pdf_output
 
 def content_hash(title, argument):
     return hashlib.md5((title + argument).encode()).hexdigest()
