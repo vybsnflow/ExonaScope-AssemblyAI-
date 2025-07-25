@@ -66,7 +66,7 @@ def show_video_upload():
             files = {"file": (video_file.name, video_file, "video/mp4")}
 
             # Replace with your actual droplet IP address
-            response = requests.post("http://your_droplet_ip:8000/upload", files=files)
+            response = requests.post("http://134.199.196.230:8501", files=files)
 
             # Step 3: Show result
             if response.status_code == 200:
