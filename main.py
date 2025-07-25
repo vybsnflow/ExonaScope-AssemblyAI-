@@ -49,6 +49,36 @@ def has_audio_track(video_path):
     result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     return result.stdout.strip() != b''
 
+def show_video_upload():
+    st.header("📤 Upload Your Video")
+    
+    st.set_page_config(page_title="Video Uploader", layout="centered")
+    st.title("📤 Upload Your Video File")
+
+    # Step 1: File Uploader UI
+    video_file = st.file_uploader("Choose a video file to upload", type=["mp4", "mov", "avi", "mkv"])
+
+    # Step 2: Handle Upload to FastAPI server
+    if video_file is not None:
+        st.info("Uploading to server...")
+
+        try:
+            files = {"file": (video_file.name, video_file, "video/mp4")}
+
+            # Replace with your actual droplet IP address
+            response = requests.post("http://your_droplet_ip:8000/upload", files=files)
+
+            # Step 3: Show result
+            if response.status_code == 200:
+                st.success("✅ Upload successful!")
+                st.json(response.json())
+            else:
+                st.error(f"❌ Upload failed with status code {response.status_code}")
+        except Exception as e:
+            st.error(f"🚫 Error during upload: {e}")
+
+
+
 def extract_audio_from_video(video_file_path, audio_ext=".wav"):
     with tempfile.NamedTemporaryFile(delete=False, suffix=audio_ext) as temp_audio:
         audio_path = temp_audio.name
