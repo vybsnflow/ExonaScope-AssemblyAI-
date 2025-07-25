@@ -9,8 +9,10 @@ from docx.enum.text import WD_PARAGRAPH_ALIGNMENT, WD_LINE_SPACING
 from fpdf import FPDF
 from openai import OpenAI
 import hashlib
+import re # For cleaning memo sections
 
-FONT_PATH = "/usr/share/fonts/truetype/msttcorefonts/Century_Schoolbook.ttf"  # Adjust this for your env!
+
+FONT_PATH = "fonts/Century-Schoolbook-Normal.ttf"
 
 # --- Custom CSS for streamlit preview ---
 st.markdown("""
@@ -76,6 +78,21 @@ def dedup_citations(cases):
             unique[key] = c
     return list(unique.values())
 
+def clean_unicode(text):
+    """Replace problematic Unicode characters with ASCII equivalents for PDF export."""
+    replacements = {
+        '\u2013': '-',    # en-dash
+        '\u2014': '--',   # em-dash
+        '\u2018': "'",    # left single quote
+        '\u2019': "'",    # right single quote (your current error)
+        '\u201c': '"',    # left double quote
+        '\u201d': '"',    # right double quote
+        # Add further replacements here if needed
+    }
+    for uni_char, ascii_char in replacements.items():
+        text = text.replace(uni_char, ascii_char)
+    return text
+
 def fetch_caselaw_from_courtlistener(arg, jurisdictions, limit=4, appellate_only=False):
     """Get up-to-4 caselaw hits per jurisdiction (deduped)."""
     results = []
@@ -113,18 +130,24 @@ def fetch_caselaw_from_courtlistener(arg, jurisdictions, limit=4, appellate_only
 
 def gpt_argument_and_rebuttal(section_title, arg, facts, jurisdiction_str, caselaw_md, is_suppression=True):
     api_key = os.getenv("OPENAI_API_KEY")
-    client = OpenAI(api_key=api_key)
+
     what = 'suppression issue' if is_suppression else 'defense theory'
     prompt = f"""You are an experienced criminal defense attorney. For a confidential internal memorandum, draft a clear, highly professional legal argument for:
-{what.title()}: {section_title}
-Jurisdictions: {jurisdiction_str}
-Facts: {facts}
-Argument/Explanation: {arg}
-Supporting Caselaw:
-{caselaw_md}
+    {what.title()}: {section_title}
+    Jurisdictions: {jurisdiction_str}
+    Facts: {facts}
+    Argument/Explanation: {arg}
+    Supporting Caselaw:
+    {caselaw_md}
 
-Cite using Bluebook format (name, citation, year), and then write a short 'Counterarguments and Rebuttal' section that anticipates and responds to how the prosecution will likely attack this argument. Use real cited cases in both main argument and the rebuttal if possible. Label each section clearly.
-"""
+    Cite using Bluebook format (name, citation, year), and then write a short 'Counterarguments and Rebuttal' section that anticipates and responds to how the prosecution will likely attack this argument. Use real cited cases in both main argument and the rebuttal if possible. Label each section clearly. 
+    Write the section as if it is part of a professional legal memorandum being submitted to court.
+    Do NOT include boilerplate headers such as 'To:', 'From:', 'Date:', or 'Subject:'.
+    Use the section title (e.g., 'Unlawful Arrest Without Probable Cause') as a bold or styled heading.
+    Begin directly with the legal argument and reasoning.
+    """
+    # Call the API and return the response text.
+    client = OpenAI(api_key=api_key)
     response = client.chat.completions.create(
         model="gpt-4o",
         messages=[
@@ -132,7 +155,20 @@ Cite using Bluebook format (name, citation, year), and then write a short 'Count
             {"role": "user", "content": prompt}
         ]
     )
-    return response.choices[0].message.content.strip()
+    return response.choices[0].message.content
+
+def clean_memo_section(text):
+    # Remove any remaining boilerplate lines if GPT still returns them
+    patterns_to_remove = [
+        r"(?i)^To:.*$", 
+        r"(?i)^From:.*$", 
+        r"(?i)^Date:.*$", 
+        r"(?i)^Subject:.*$",
+        r"(?i)^Argument:.*$",  # Remove "Argument: XYZ" headers
+    ]
+    for pattern in patterns_to_remove:
+        text = re.sub(pattern, "", text, flags=re.MULTILINE)
+    return text.strip()
 
 def build_case_analysis_memo_docx(title, atty, case_num, date_str, facts, suppression_issues, defense_sections):
     doc = Document()
@@ -236,29 +272,22 @@ def build_case_analysis_memo_docx(title, atty, case_num, date_str, facts, suppre
     return doc
 
 def text_to_pdf(text):
+    text = clean_unicode(text)  # ← ✅ Use the cleaning function here!
     pdf = FPDF()
     pdf.add_page()
     try:
         pdf.add_font('CSchoolbook', '', FONT_PATH, uni=True)
         pdf.set_font("CSchoolbook", '', 12)
-    except Exception as e:
-        print(f"Error occurred: {e}")
+    except requests.exceptions.RequestException as _:
         pdf.set_font("Arial", size=12)
-    safe_text = text.replace('\u2013', '-')
-    for line in safe_text.split('\n'):
+    for line in text.split('\n'):
         pdf.multi_cell(0, 10, line if isinstance(line, str) else str(line))
-        pdf_string = pdf.output(dest="S")
-        pdf_bytes = pdf_string  # Direct use of bytearray
-        pdf_output = BytesIO(pdf_bytes)
 
-
-        # Capture the output of the PDF
-        output = pdf.output(dest='S')  # This directly gives a bytearray
-        pdf_output.write(output)
-
-        pdf_output.write(output)
-        pdf_output.seek(0)
-        return pdf_output
+    # Removed unused variable `pdf_string` and corrected assignment and usage:
+    pdf_bytes = pdf.output(dest="S")
+    pdf_output = BytesIO(pdf_bytes)  # Initialize BytesIO with the PDF bytes
+    pdf_output.seek(0)
+    return pdf_output
 
 def content_hash(title, argument):
     return hashlib.md5((title + argument).encode()).hexdigest()
@@ -342,7 +371,7 @@ if st.button("Run Caselaw Search & Generate Memo") and allow_export:
                 case_md_list.append(bb)
             memo_full = gpt_argument_and_rebuttal(issue['title'], issue['argument'], memo_facts, juris_label, "\n".join(case_md_list), True)
             main, rebuttal = memo_full, ""
-            if "Counterarguments and Rebuttal:" in memo_full:
+            if memo_full and "Counterarguments and Rebuttal:" in memo_full:
                 parts = memo_full.split("Counterarguments and Rebuttal:")
                 main = parts[0].strip()
                 rebuttal = parts[1].strip() if len(parts) > 1 else ""
@@ -365,7 +394,7 @@ if st.button("Run Caselaw Search & Generate Memo") and allow_export:
                 case_md_list.append(bb)
             memo_full = gpt_argument_and_rebuttal(defense['title'], defense['argument'], memo_facts, juris_label, "\n".join(case_md_list), False)
             main, rebuttal = memo_full, ""
-            if "Counterarguments and Rebuttal:" in memo_full:
+            if memo_full and "Counterarguments and Rebuttal:" in memo_full:
                 parts = memo_full.split("Counterarguments and Rebuttal:")
                 main = parts[0].strip()
                 rebuttal = parts[1].strip() if len(parts) > 1 else ""
@@ -410,9 +439,7 @@ if st.button("Run Caselaw Search & Generate Memo") and allow_export:
     memo_lines.extend([
         "",
         "<b>CONCLUSION</b>",
-        "This memorandum is for internal defense team review only and is not intended for filing without attorney revision.",
-        "Respectfully submitted,",
-        "<br><br>____________________________<br>Attorney for the Defense"
+        "This memorandum is for internal defense team review only and is not intended for filing without attorney revision."
     ])
     st.markdown('<br>'.join(memo_lines), unsafe_allow_html=True)
 
@@ -437,3 +464,4 @@ if st.button("Run Caselaw Search & Generate Memo") and allow_export:
 
 if st.checkbox("🪵 Show Session State"):
     st.json(dict(st.session_state))
+
