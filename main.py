@@ -12,6 +12,9 @@ from PIL import Image
 import subprocess
 import mimetypes
 from moviepy.video.io.VideoFileClip import VideoFileClip
+from dotenv import load_dotenv
+load_dotenv()
+
 
 # --- CONFIG ---
 ASSEMBLYAI_API_KEY = os.environ.get("ASSEMBLYAI_API_KEY")
