@@ -1,3 +1,6 @@
+from docx.shared import RGBColor
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 import streamlit as st
 import requests
 import os
@@ -9,8 +12,7 @@ from docx.enum.text import WD_PARAGRAPH_ALIGNMENT, WD_LINE_SPACING
 from fpdf import FPDF
 from openai import OpenAI
 import hashlib
-import re # For cleaning memo sections
-
+import re  # For cleaning memo sections
 
 FONT_PATH = "fonts/Century-Schoolbook-Normal.ttf"
 
@@ -28,37 +30,84 @@ body, textarea, input, select, label, div, .stTextArea textarea, .stTextInput in
 a { color: #2265bc !important; }
 b { font-weight: 700 !important; }
 </style>
-""", unsafe_allow_html=True)
+""",
+            unsafe_allow_html=True)
 
 # ---- Jurisdictions ----
 JURIS_LIST = [
     # ...[as before, full list of states/territories/federal appellate circuits]...
-    ("Alabama", "alabama"), ("Alaska", "alaska"), ("Arizona", "arizona"),
-    ("Arkansas", "arkansas"), ("California", "california"), ("Colorado", "colorado"),
-    ("Connecticut", "connecticut"), ("Delaware", "delaware"), ("District of Columbia", "dc"),
-    ("Florida", "florida"), ("Georgia", "georgia"), ("Hawaii", "hawaii"), ("Idaho", "idaho"),
-    ("Illinois", "illinois"), ("Indiana", "indiana"), ("Iowa", "iowa"), ("Kansas", "kansas"),
-    ("Kentucky", "kentucky"), ("Louisiana", "louisiana"), ("Maine", "maine"), ("Maryland", "maryland"),
-    ("Massachusetts", "massachusetts"), ("Michigan", "michigan"), ("Minnesota", "minnesota"),
-    ("Mississippi", "mississippi"), ("Missouri", "missouri"), ("Montana", "montana"), ("Nebraska", "nebraska"),
-    ("Nevada", "nevada"), ("New Hampshire", "new_hampshire"), ("New Jersey", "new_jersey"),
-    ("New Mexico", "new_mexico"), ("New York", "new_york"), ("North Carolina", "north_carolina"),
-    ("North Dakota", "north_dakota"), ("Ohio", "ohio"), ("Oklahoma", "oklahoma"),
-    ("Oregon", "oregon"), ("Pennsylvania", "pennsylvania"), ("Puerto Rico", "pr"),
-    ("Rhode Island", "rhode_island"), ("South Carolina", "south_carolina"),
-    ("South Dakota", "south_dakota"), ("Tennessee", "tennessee"), ("Texas", "texas"),
-    ("Utah", "utah"), ("Vermont", "vermont"), ("Virginia", "virginia"),
-    ("Washington", "washington"), ("West Virginia", "west_virginia"), ("Wisconsin", "wisconsin"),
-    ("Wyoming", "wyoming"), ("American Samoa", "as"), ("Guam", "gu"),
-    ("Northern Mariana Islands", "mp"), ("Virgin Islands", "vi"),
+    ("Alabama", "alabama"),
+    ("Alaska", "alaska"),
+    ("Arizona", "arizona"),
+    ("Arkansas", "arkansas"),
+    ("California", "california"),
+    ("Colorado", "colorado"),
+    ("Connecticut", "connecticut"),
+    ("Delaware", "delaware"),
+    ("District of Columbia", "dc"),
+    ("Florida", "florida"),
+    ("Georgia", "georgia"),
+    ("Hawaii", "hawaii"),
+    ("Idaho", "idaho"),
+    ("Illinois", "illinois"),
+    ("Indiana", "indiana"),
+    ("Iowa", "iowa"),
+    ("Kansas", "kansas"),
+    ("Kentucky", "kentucky"),
+    ("Louisiana", "louisiana"),
+    ("Maine", "maine"),
+    ("Maryland", "maryland"),
+    ("Massachusetts", "massachusetts"),
+    ("Michigan", "michigan"),
+    ("Minnesota", "minnesota"),
+    ("Mississippi", "mississippi"),
+    ("Missouri", "missouri"),
+    ("Montana", "montana"),
+    ("Nebraska", "nebraska"),
+    ("Nevada", "nevada"),
+    ("New Hampshire", "new_hampshire"),
+    ("New Jersey", "new_jersey"),
+    ("New Mexico", "new_mexico"),
+    ("New York", "new_york"),
+    ("North Carolina", "north_carolina"),
+    ("North Dakota", "north_dakota"),
+    ("Ohio", "ohio"),
+    ("Oklahoma", "oklahoma"),
+    ("Oregon", "oregon"),
+    ("Pennsylvania", "pennsylvania"),
+    ("Puerto Rico", "pr"),
+    ("Rhode Island", "rhode_island"),
+    ("South Carolina", "south_carolina"),
+    ("South Dakota", "south_dakota"),
+    ("Tennessee", "tennessee"),
+    ("Texas", "texas"),
+    ("Utah", "utah"),
+    ("Vermont", "vermont"),
+    ("Virginia", "virginia"),
+    ("Washington", "washington"),
+    ("West Virginia", "west_virginia"),
+    ("Wisconsin", "wisconsin"),
+    ("Wyoming", "wyoming"),
+    ("American Samoa", "as"),
+    ("Guam", "gu"),
+    ("Northern Mariana Islands", "mp"),
+    ("Virgin Islands", "vi"),
     ("Supreme Court of the United States", "scotus"),
-    ("1st Cir. Court of Appeals", "ca1"), ("2nd Cir. Court of Appeals", "ca2"),
-    ("3rd Cir. Court of Appeals", "ca3"), ("4th Cir. Court of Appeals", "ca4"),
-    ("5th Cir. Court of Appeals", "ca5"), ("6th Cir. Court of Appeals", "ca6"),
-    ("7th Cir. Court of Appeals", "ca7"), ("8th Cir. Court of Appeals", "ca8"),
-    ("9th Cir. Court of Appeals", "ca9"), ("10th Cir. Court of Appeals", "ca10"),
-    ("11th Cir. Court of Appeals", "ca11"), ("D.C. Circuit", "cadc"), ("Federal Circuit", "cafc"),
+    ("1st Cir. Court of Appeals", "ca1"),
+    ("2nd Cir. Court of Appeals", "ca2"),
+    ("3rd Cir. Court of Appeals", "ca3"),
+    ("4th Cir. Court of Appeals", "ca4"),
+    ("5th Cir. Court of Appeals", "ca5"),
+    ("6th Cir. Court of Appeals", "ca6"),
+    ("7th Cir. Court of Appeals", "ca7"),
+    ("8th Cir. Court of Appeals", "ca8"),
+    ("9th Cir. Court of Appeals", "ca9"),
+    ("10th Cir. Court of Appeals", "ca10"),
+    ("11th Cir. Court of Appeals", "ca11"),
+    ("D.C. Circuit", "cadc"),
+    ("Federal Circuit", "cafc"),
 ]
+
 
 def bluebook_citation(case):
     if not case.get("case_name") or not case.get("citation"): return ""
@@ -66,9 +115,11 @@ def bluebook_citation(case):
     if case.get("url"): return f"[{citation}]({case['url']})"
     return citation
 
+
 def bluebook_citation_docx(case):
     if not case.get("case_name") or not case.get("citation"): return ""
     return f"{case['case_name']}, {case['citation']} ({case['court']} {case['date'][:4]})"
+
 
 def dedup_citations(cases):
     unique = {}
@@ -78,22 +129,27 @@ def dedup_citations(cases):
             unique[key] = c
     return list(unique.values())
 
+
 def clean_unicode(text):
     """Replace problematic Unicode characters with ASCII equivalents for PDF export."""
     replacements = {
-        '\u2013': '-',    # en-dash
-        '\u2014': '--',   # em-dash
-        '\u2018': "'",    # left single quote
-        '\u2019': "'",    # right single quote (your current error)
-        '\u201c': '"',    # left double quote
-        '\u201d': '"',    # right double quote
+        '\u2013': '-',  # en-dash
+        '\u2014': '--',  # em-dash
+        '\u2018': "'",  # left single quote
+        '\u2019': "'",  # right single quote (your current error)
+        '\u201c': '"',  # left double quote
+        '\u201d': '"',  # right double quote
         # Add further replacements here if needed
     }
     for uni_char, ascii_char in replacements.items():
         text = text.replace(uni_char, ascii_char)
     return text
 
-def fetch_caselaw_from_courtlistener(arg, jurisdictions, limit=4, appellate_only=False):
+
+def fetch_caselaw_from_courtlistener(arg,
+                                     jurisdictions,
+                                     limit=4,
+                                     appellate_only=False):
     """Get up-to-4 caselaw hits per jurisdiction (deduped)."""
     results = []
     for juris_code in jurisdictions:
@@ -105,30 +161,52 @@ def fetch_caselaw_from_courtlistener(arg, jurisdictions, limit=4, appellate_only
             "jurisdiction": juris_code,
         }
         if appellate_only:
-            params["court_type"] = "A"  # "A" for appellate courts; omit for all
+            params[
+                "court_type"] = "A"  # "A" for appellate courts; omit for all
         params = {k: v for k, v in params.items() if v is not None}
         try:
-            r = requests.get("https://www.courtlistener.com/api/rest/v3/search/", params=params, timeout=10)
+            r = requests.get(
+                "https://www.courtlistener.com/api/rest/v3/search/",
+                params=params,
+                timeout=10)
             if r.status_code == 200:
                 for item in r.json().get("results", []):
-                    case_name = item.get("caseName") or item.get("case_name") or ""
+                    case_name = item.get("caseName") or item.get(
+                        "case_name") or ""
                     citation = item.get("citation", "")
                     court = item.get("court", {}).get("name", "")
-                    date_val = item.get("dateFiled", item.get("date_filed", ""))
+                    date_val = item.get("dateFiled",
+                                        item.get("date_filed", ""))
                     url = item.get("absolute_url", "")
                     summary = item.get("plain_text", "")
                     if summary:
-                        summary = summary[:350].replace("\n", " ") + ("..." if len(summary) > 340 else "")
+                        summary = summary[:350].replace(
+                            "\n", " ") + ("..." if len(summary) > 340 else "")
                     results.append({
-                        "case_name": case_name, "citation": citation, "court": court,
-                        "date": date_val, "url": f"https://www.courtlistener.com{url}" if url else "",
-                        "summary": summary
+                        "case_name":
+                        case_name,
+                        "citation":
+                        citation,
+                        "court":
+                        court,
+                        "date":
+                        date_val,
+                        "url":
+                        f"https://www.courtlistener.com{url}" if url else "",
+                        "summary":
+                        summary
                     })
         except Exception:
             pass
     return dedup_citations(results)
 
-def gpt_argument_and_rebuttal(section_title, arg, facts, jurisdiction_str, caselaw_md, is_suppression=True):
+
+def gpt_argument_and_rebuttal(section_title,
+                              arg,
+                              facts,
+                              jurisdiction_str,
+                              caselaw_md,
+                              is_suppression=True):
     api_key = os.getenv("OPENAI_API_KEY")
 
     what = 'suppression issue' if is_suppression else 'defense theory'
@@ -150,19 +228,24 @@ def gpt_argument_and_rebuttal(section_title, arg, facts, jurisdiction_str, casel
     client = OpenAI(api_key=api_key)
     response = client.chat.completions.create(
         model="gpt-4o",
-        messages=[
-            {"role": "system", "content": "You are a skilled criminal defense legal memo writer."},
-            {"role": "user", "content": prompt}
-        ]
-    )
+        messages=[{
+            "role":
+            "system",
+            "content":
+            "You are a skilled criminal defense legal memo writer."
+        }, {
+            "role": "user",
+            "content": prompt
+        }])
     return response.choices[0].message.content
+
 
 def clean_memo_section(text):
     # Remove any remaining boilerplate lines if GPT still returns them
     patterns_to_remove = [
-        r"(?i)^To:.*$", 
-        r"(?i)^From:.*$", 
-        r"(?i)^Date:.*$", 
+        r"(?i)^To:.*$",
+        r"(?i)^From:.*$",
+        r"(?i)^Date:.*$",
         r"(?i)^Subject:.*$",
         r"(?i)^Argument:.*$",  # Remove "Argument: XYZ" headers
     ]
@@ -170,50 +253,79 @@ def clean_memo_section(text):
         text = re.sub(pattern, "", text, flags=re.MULTILINE)
     return text.strip()
 
-def build_case_analysis_memo_docx(title, atty, case_num, date_str, facts, suppression_issues, defense_sections):
+
+def build_case_analysis_memo_docx(title, defendant, case_num, date_str, facts,
+                                  suppression_issues, defense_sections):
     doc = Document()
     section = doc.sections[0]
     section.left_margin = section.right_margin = Pt(72)
     section.top_margin = section.bottom_margin = Pt(72)
 
-    # Single Header
-    p = doc.add_paragraph(title)
+    # === Add Header ===
+    header = section.header
+    header_para = header.paragraphs[0]
+    header_para.text = f"{title}    Case #: {case_num}    Date: {date_str}"
+    header_para.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
+    run = header_para.runs[0]
+    run.font.size = Pt(11)
+    run.font.name = "Century Schoolbook"
+    run.bold = True
+
+    # === Add Footer with Page Number + Disclaimer ===
+    footer = section.footer
+    para = footer.paragraphs[0]
+    para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+    run = para.add_run("Page ")
+    fldChar1 = OxmlElement('w:fldChar')
+    fldChar1.set(qn('w:fldCharType'), 'begin')
+    instrText = OxmlElement('w:instrText')
+    instrText.text = "PAGE"
+    fldChar2 = OxmlElement('w:fldChar')
+    fldChar2.set(qn('w:fldCharType'), 'end')
+    run._r.append(fldChar1)
+    run._r.append(instrText)
+    run._r.append(fldChar2)
+    run.font.name = "Century Schoolbook"
+    run.font.size = Pt(9)
+
+    disclaimer = footer.add_paragraph()
+    disclaimer.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+    disc_run = disclaimer.add_run(
+        "This memorandum is for internal defense team review only.\nATTORNEY–CLIENT PRIVILEGED / WORK PRODUCT"
+    )
+    disc_run.font.color.rgb = RGBColor(128, 128, 128)
+    disc_run.italic = True
+    disc_run.font.name = "Century Schoolbook"
+    disc_run.font.size = Pt(9)
+
+    # === Main Title ===
+    p = doc.add_paragraph("CASE ANALYSIS MEMORANDUM")
     p.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-    r = p.runs[0]
-    r.font.size = Pt(16)
-    r.font.name = "Century Schoolbook"
-    r.bold = True
+    p.runs[0].font.size = Pt(16)
+    p.runs[0].font.name = "Century Schoolbook"
+    p.runs[0].bold = True
     p.paragraph_format.space_after = Pt(24)
 
-    meta = doc.add_paragraph(f"Attorney: {atty}    Case Number: {case_num}    Date: {date_str}")
-    meta.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
-    meta.paragraph_format.space_after = Pt(12)
+    # === Body Sections ===
+    def add_body_heading(text):
+        para = doc.add_paragraph(text)
+        para.runs[0].bold = True
+        para.paragraph_format.space_after = Pt(12)
 
-    priv = doc.add_paragraph("ATTORNEY–CLIENT PRIVILEGED / WORK PRODUCT")
-    priv.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
-    priv.runs[0].bold = True
-    priv.paragraph_format.space_after = Pt(12)
+    def add_justified(text):
+        para = doc.add_paragraph(text)
+        para.alignment = WD_PARAGRAPH_ALIGNMENT.JUSTIFY
+        para.paragraph_format.first_line_indent = Pt(24)
+        para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
+        para.paragraph_format.space_after = Pt(12)
 
-    # Facts section
-    head = doc.add_paragraph("SUMMARY OF PERTINENT FACTS")
-    head.runs[0].bold = True
-    para = doc.add_paragraph(facts)
-    para.alignment = WD_PARAGRAPH_ALIGNMENT.JUSTIFY
-    para.paragraph_format.first_line_indent = Pt(24)
-    para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
-    para.paragraph_format.space_after = Pt(12)
+    add_body_heading("SUMMARY OF PERTINENT FACTS")
+    add_justified(facts)
 
-    # Suppression Issues
-    head = doc.add_paragraph("A. SUPPRESSION ISSUES")
-    head.runs[0].bold = True
+    add_body_heading("A. SUPPRESSION ISSUES")
     for idx, s in enumerate(suppression_issues, 1):
-        t = doc.add_paragraph(f"{idx}. {s['title']}")
-        t.runs[0].bold = True
-        body = doc.add_paragraph(s['argument'])
-        body.alignment = WD_PARAGRAPH_ALIGNMENT.JUSTIFY
-        body.paragraph_format.first_line_indent = Pt(24)
-        body.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
-        # Caselaw
+        doc.add_paragraph(f"{idx}. {s['title']}").runs[0].bold = True
+        add_justified(s['argument'])
         para = doc.add_paragraph("Supporting Caselaw:")
         para.runs[0].bold = True
         if s['cases']:
@@ -222,26 +334,16 @@ def build_case_analysis_memo_docx(title, atty, case_num, date_str, facts, suppre
                 if case.get('summary'): txt += f" — {case['summary']}"
                 doc.add_paragraph(txt, style='List Bullet')
         else:
-            doc.add_paragraph("No relevant caselaw found.", style='List Bullet')
-        # Counter/rebuttal
+            doc.add_paragraph("No relevant caselaw found.",
+                              style='List Bullet')
         para = doc.add_paragraph("Counterarguments and Rebuttal:")
         para.runs[0].bold = True
-        rebut = doc.add_paragraph(s.get('rebuttal', ''))
-        rebut.alignment = WD_PARAGRAPH_ALIGNMENT.JUSTIFY
-        rebut.paragraph_format.first_line_indent = Pt(24)
-        rebut.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
+        add_justified(s.get('rebuttal', ''))
 
-    # Defenses
-    head = doc.add_paragraph("B. POTENTIAL DEFENSES")
-    head.runs[0].bold = True
+    add_body_heading("B. POTENTIAL DEFENSES")
     for idx, d in enumerate(defense_sections, 1):
-        t = doc.add_paragraph(f"{idx}. {d['title']}")
-        t.runs[0].bold = True
-        body = doc.add_paragraph(d['argument'])
-        body.alignment = WD_PARAGRAPH_ALIGNMENT.JUSTIFY
-        body.paragraph_format.first_line_indent = Pt(24)
-        body.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
-        # Caselaw
+        doc.add_paragraph(f"{idx}. {d['title']}").runs[0].bold = True
+        add_justified(d['argument'])
         para = doc.add_paragraph("Supporting Caselaw:")
         para.runs[0].bold = True
         if d['cases']:
@@ -250,58 +352,122 @@ def build_case_analysis_memo_docx(title, atty, case_num, date_str, facts, suppre
                 if case.get('summary'): txt += f" — {case['summary']}"
                 doc.add_paragraph(txt, style='List Bullet')
         else:
-            doc.add_paragraph("No relevant caselaw found.", style='List Bullet')
+            doc.add_paragraph("No relevant caselaw found.",
+                              style='List Bullet')
         para = doc.add_paragraph("Counterarguments and Rebuttal:")
         para.runs[0].bold = True
-        rebut = doc.add_paragraph(d.get('rebuttal', ''))
-        rebut.alignment = WD_PARAGRAPH_ALIGNMENT.JUSTIFY
-        rebut.paragraph_format.first_line_indent = Pt(24)
-        rebut.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
+        add_justified(d.get('rebuttal', ''))
 
-    c = doc.add_paragraph("CONCLUSION")
-    c.runs[0].bold = True
-    concl_text = "This memorandum is for internal defense team review only and is not intended for filing without attorney revision.\n"
-    concl = doc.add_paragraph(concl_text)
-    concl.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
+    doc.add_paragraph("CONCLUSION").runs[0].bold = True
+    doc.add_paragraph(
+        "This memorandum is for internal defense team review only and is not intended for filing without attorney revision."
+    )
 
-    # FONT consistency on every run
+    # Final font styling
     for p in doc.paragraphs:
         for r in p.runs:
             r.font.name = "Century Schoolbook"
             r.font.size = Pt(12)
     return doc
 
-def text_to_pdf(text):
-    text = clean_unicode(text)  # ← ✅ Use the cleaning function here!
-    pdf = FPDF()
-    pdf.add_page()
-    try:
-        pdf.add_font('CSchoolbook', '', FONT_PATH, uni=True)
-        pdf.set_font("CSchoolbook", '', 12)
-    except requests.exceptions.RequestException as _:
-        pdf.set_font("Arial", size=12)
-    for line in text.split('\n'):
-        pdf.multi_cell(0, 10, line if isinstance(line, str) else str(line))
 
-    # Removed unused variable `pdf_string` and corrected assignment and usage:
-    pdf_bytes = pdf.output(dest="S")
-    pdf_output = BytesIO(pdf_bytes)  # Initialize BytesIO with the PDF bytes
-    pdf_output.seek(0)
-    return pdf_output
+class CaseMemoPDF(FPDF):
+
+    def __init__(self, case_title, case_number, memo_date):
+        super().__init__()
+        self.case_title = case_title
+        self.case_number = case_number
+        self.memo_date = memo_date
+        self.set_auto_page_break(auto=True, margin=20)
+        self.alias_nb_pages()
+
+    def header(self):
+        self.set_font("Arial", "B", 11)
+        self.set_text_color(0)
+        self.cell(
+            0,
+            8,
+            f"{self.case_title}    Case #: {self.case_number}    Date: {self.memo_date}",
+            ln=1,
+            align="L")
+        self.ln(2)
+
+    def footer(self):
+        self.set_y(-20)
+        self.set_font("Arial", "", 9)
+        self.set_text_color(0)
+        self.cell(0, 6, f"Page {self.page_no()} of {{nb}}", align="C", ln=1)
+        self.set_text_color(128)
+        self.set_font("Arial", "I", 8)
+        self.multi_cell(
+            0,
+            4,
+            "This memorandum is for internal defense team review only.\nATTORNEY–CLIENT PRIVILEGED / WORK PRODUCT",
+            align="C")
+
+
+def convert_docx_to_pdf_rich(docx_path, pdf_path, case_title, case_number,
+                             memo_date):
+    doc = Document(docx_path)
+    pdf = CaseMemoPDF(case_title, case_number, memo_date)
+    pdf.add_page()
+    pdf.set_left_margin(20)
+    pdf.set_right_margin(20)
+
+    for para in doc.paragraphs:
+        style = para.style.name.lower()
+        text = clean_unicode(para.text.strip())
+
+        if not text:
+            pdf.ln(3)
+            continue
+
+        if style.startswith("heading") or text.isupper():
+            pdf.set_font("Arial", "B", 12)
+            pdf.set_text_color(0)
+            pdf.ln(4)
+            pdf.multi_cell(0, 8, text.upper())
+            pdf.ln(1)
+        elif any(text.lower().startswith(label) for label in [
+                "type of violation", "legal standard", "supporting evidence",
+                "explanation", "argument", "case law", "defense",
+                "counter argument", "rebuttal", "supporting caselaw",
+                "counterarguments and rebuttal"
+        ]):
+            pdf.set_font("Arial", "B", 11)
+            label, sep, rest = text.partition(":")
+            pdf.multi_cell(0, 7, f"{label.strip()}:")
+            if rest.strip():
+                pdf.set_font("Arial", "", 11)
+                pdf.multi_cell(0, 7, rest.strip())
+        else:
+            pdf.set_font("Arial", "", 11)
+            pdf.set_text_color(0)
+            pdf.multi_cell(0, 7, text)
+
+    pdf.output(pdf_path)
 
 def content_hash(title, argument):
     return hashlib.md5((title + argument).encode()).hexdigest()
 
+
 # ==== Streamlit UI ====
 st.title("ExonaScope Phase 3 – Case Analysis Memorandum")
 
-# --- Editable Inputs: Attorney, Case Number, Date ---
-attorney_name = st.text_input("Attorney Name", value=st.session_state.get("attorney_name", ""), key="attorney_name")
-case_number = st.text_input("Case Number", value=st.session_state.get("case_number", ""), key="case_number")
+# --- Editable Inputs: Defendant, Case Number, Date ---
+Defendant_name = st.text_input("Defendant Name",
+                               value=st.session_state.get(
+                                   "defendant_name", ""),
+                               key="defendant_name")
+case_number = st.text_input("Case Number",
+                            value=st.session_state.get("case_number", ""),
+                            key="case_number")
 today_date = date.today().strftime("%B %d, %Y")
 
 # --- Editable Facts ---
-memo_facts = st.text_area("Summary of Pertinent Facts", value=st.session_state.get("motion_facts", ""), key="summary_facts")
+memo_facts = st.text_area("Summary of Pertinent Facts",
+                          value=st.session_state.get("motion_facts", ""),
+                          key="summary_facts")
 
 # --- Load Phase 2 Data ---
 phase2_issues = st.session_state.get("phase2_issues", []) or []
@@ -309,21 +475,25 @@ phase2_defenses = st.session_state.get("phase2_defenses", []) or []
 
 # --- Jurisdictions, Appellate Only ---
 juris_selected = st.multiselect("Select Jurisdictions:",
-    options=JURIS_LIST,
-    default=[("Supreme Court of the United States", "scotus")],
-    format_func=lambda x: x[0]
-)
+                                options=JURIS_LIST,
+                                default=[("Supreme Court of the United States",
+                                          "scotus")],
+                                format_func=lambda x: x[0])
 juris_codes = [code for desc, code in juris_selected]
 juris_label = ", ".join(desc for desc, code in juris_selected)
 appellate_only = st.checkbox("Appellate Cases Only", value=True)
 
 # --- Session State for Boxes ---
 if "issue_boxes" not in st.session_state:
-    st.session_state.issue_boxes = [
-        {"title": i["title"], "argument": i.get("explanation", "")} for i in phase2_issues]
+    st.session_state.issue_boxes = [{
+        "title": i["title"],
+        "argument": i.get("explanation", "")
+    } for i in phase2_issues]
 if "defense_boxes" not in st.session_state:
-    st.session_state.defense_boxes = [
-        {"title": d["title"], "argument": d.get("explanation", "")} for d in phase2_defenses]
+    st.session_state.defense_boxes = [{
+        "title": d["title"],
+        "argument": d.get("explanation", "")
+    } for d in phase2_defenses]
 
 # --- UI for Issues/Defenses --
 if st.button("Add Custom Suppression Issue"):
@@ -334,21 +504,29 @@ if st.button("Add Custom Defense"):
 st.subheader("Suppression Issues (edit or add as needed)")
 issue_args = []
 for idx, box in enumerate(st.session_state.issue_boxes):
-    c1, c2 = st.columns([1,4])
-    box["title"] = c1.text_input(f"Issue {idx+1} Short Title", value=box["title"], key=f"issue_title_{idx}")
-    box["argument"] = c2.text_area(f"Issue {idx+1} Argument/Explanation", value=box["argument"], key=f"issue_argument_{idx}")
+    c1, c2 = st.columns([1, 4])
+    box["title"] = c1.text_input(f"Issue {idx+1} Short Title",
+                                 value=box["title"],
+                                 key=f"issue_title_{idx}")
+    box["argument"] = c2.text_area(f"Issue {idx+1} Argument/Explanation",
+                                   value=box["argument"],
+                                   key=f"issue_argument_{idx}")
     issue_args.append(box)
 
 st.subheader("Defense Theories (edit or add as needed)")
 defense_args = []
 for idx, box in enumerate(st.session_state.defense_boxes):
-    c1, c2 = st.columns([1,4])
-    box["title"] = c1.text_input(f"Defense {idx+1} Short Title", value=box["title"], key=f"defense_title_{idx}")
-    box["argument"] = c2.text_area(f"Defense {idx+1} Argument/Explanation", value=box["argument"], key=f"defense_argument_{idx}")
+    c1, c2 = st.columns([1, 4])
+    box["title"] = c1.text_input(f"Defense {idx+1} Short Title",
+                                 value=box["title"],
+                                 key=f"defense_title_{idx}")
+    box["argument"] = c2.text_area(f"Defense {idx+1} Argument/Explanation",
+                                   value=box["argument"],
+                                   key=f"defense_argument_{idx}")
     defense_args.append(box)
 
 # --- Require Key Fields to Export ---
-allow_export = attorney_name.strip() and case_number.strip()
+allow_export = Defendant_name.strip() and case_number.strip()
 if not allow_export:
     st.warning("Please enter both an Attorney Name and Case Number.")
 
@@ -360,22 +538,36 @@ if st.button("Run Caselaw Search & Generate Memo") and allow_export:
     for idx, issue in enumerate(issue_args):
         cur_hash = content_hash(issue["title"], issue["argument"])
         hash_key, res_key = f"issue_hash_{idx}", f"issue_result_{idx}"
-        if st.session_state.get(hash_key) != cur_hash or not st.session_state.get(res_key):
+        if st.session_state.get(
+                hash_key) != cur_hash or not st.session_state.get(res_key):
             search_arg = f"{issue['title']} {issue['argument']}".strip()
-            cases = fetch_caselaw_from_courtlistener(search_arg, juris_codes, limit=4, appellate_only=appellate_only)
+            cases = fetch_caselaw_from_courtlistener(
+                search_arg,
+                juris_codes,
+                limit=4,
+                appellate_only=appellate_only)
             case_md_list = []
             for c in cases:
                 bb = bluebook_citation(c)
                 if c.get('summary'):
                     bb += f" — {c['summary']}"
                 case_md_list.append(bb)
-            memo_full = gpt_argument_and_rebuttal(issue['title'], issue['argument'], memo_facts, juris_label, "\n".join(case_md_list), True)
+            memo_full = gpt_argument_and_rebuttal(issue['title'],
+                                                  issue['argument'],
+                                                  memo_facts, juris_label,
+                                                  "\n".join(case_md_list),
+                                                  True)
             main, rebuttal = memo_full, ""
             if memo_full and "Counterarguments and Rebuttal:" in memo_full:
                 parts = memo_full.split("Counterarguments and Rebuttal:")
                 main = parts[0].strip()
                 rebuttal = parts[1].strip() if len(parts) > 1 else ""
-            st.session_state[hash_key], st.session_state[res_key] = cur_hash, {"title": issue["title"], "argument": main, "cases": cases, "rebuttal": rebuttal}
+            st.session_state[hash_key], st.session_state[res_key] = cur_hash, {
+                "title": issue["title"],
+                "argument": main,
+                "cases": cases,
+                "rebuttal": rebuttal
+            }
         section = st.session_state[res_key]
         suppression_sections.append(section)
 
@@ -383,34 +575,54 @@ if st.button("Run Caselaw Search & Generate Memo") and allow_export:
     for idx, defense in enumerate(defense_args):
         cur_hash = content_hash(defense["title"], defense["argument"])
         hash_key, res_key = f"defense_hash_{idx}", f"defense_result_{idx}"
-        if st.session_state.get(hash_key) != cur_hash or not st.session_state.get(res_key):
+        if st.session_state.get(
+                hash_key) != cur_hash or not st.session_state.get(res_key):
             search_arg = f"{defense['title']} {defense['argument']}".strip()
-            cases = fetch_caselaw_from_courtlistener(search_arg, juris_codes, limit=4, appellate_only=appellate_only)
+            cases = fetch_caselaw_from_courtlistener(
+                search_arg,
+                juris_codes,
+                limit=4,
+                appellate_only=appellate_only)
             case_md_list = []
             for c in cases:
                 bb = bluebook_citation(c)
                 if c.get('summary'):
                     bb += f" — {c['summary']}"
                 case_md_list.append(bb)
-            memo_full = gpt_argument_and_rebuttal(defense['title'], defense['argument'], memo_facts, juris_label, "\n".join(case_md_list), False)
+            memo_full = gpt_argument_and_rebuttal(defense['title'],
+                                                  defense['argument'],
+                                                  memo_facts, juris_label,
+                                                  "\n".join(case_md_list),
+                                                  False)
             main, rebuttal = memo_full, ""
             if memo_full and "Counterarguments and Rebuttal:" in memo_full:
                 parts = memo_full.split("Counterarguments and Rebuttal:")
                 main = parts[0].strip()
                 rebuttal = parts[1].strip() if len(parts) > 1 else ""
-            st.session_state[hash_key], st.session_state[res_key] = cur_hash, {"title": defense["title"], "argument": main, "cases": cases, "rebuttal": rebuttal}
+            st.session_state[hash_key], st.session_state[res_key] = cur_hash, {
+                "title": defense["title"],
+                "argument": main,
+                "cases": cases,
+                "rebuttal": rebuttal
+            }
         section = st.session_state[res_key]
         defense_sections.append(section)
 
     # --- Memo Preview ---
     memo_lines = []
-    memo_lines.append("<div style='text-align: center; font-weight: bold; font-size:20px;'>CASE ANALYSIS MEMORANDUM</div>")
-    memo_lines.append(f"<b>Attorney:</b> {attorney_name} &nbsp;&nbsp;&nbsp; <b>Case Number:</b> {case_number} &nbsp;&nbsp;&nbsp; <b>Date:</b> {today_date}<br>")
+    memo_lines.append(
+        "<div style='text-align: center; font-weight: bold; font-size:20px;'>CASE ANALYSIS MEMORANDUM</div>"
+    )
+    memo_lines.append(
+        f"<b>Defendant:</b> {Defendant_name} &nbsp;&nbsp;&nbsp; <b>Case Number:</b> {case_number} &nbsp;&nbsp;&nbsp; <b>Date:</b> {today_date}<br>"
+    )
     memo_lines.append("<b>ATTORNEY–CLIENT PRIVILEGED / WORK PRODUCT</b><br>")
     memo_lines.append(f"<b>SUMMARY OF PERTINENT FACTS</b><br>{memo_facts}<br>")
     memo_lines.append("<b>A. SUPPRESSION ISSUES</b>")
     for idx, s in enumerate(suppression_sections, 1):
-        memo_lines.append(f"<b>{idx}. {s['title']}</b><br>{s['argument']}<br><b>Supporting Caselaw:</b>")
+        memo_lines.append(
+            f"<b>{idx}. {s['title']}</b><br>{s['argument']}<br><b>Supporting Caselaw:</b>"
+        )
         if s['cases']:
             for c in s['cases']:
                 bb = bluebook_citation(c)
@@ -418,13 +630,18 @@ if st.button("Run Caselaw Search & Generate Memo") and allow_export:
                     bb += f" — {c['summary']}"
                 memo_lines.append(f"&nbsp;&nbsp;• {bb}")
         else:
-            memo_lines.append("&nbsp;&nbsp;<i>No relevant caselaw found for this argument in the selected jurisdictions.</i>")
+            memo_lines.append(
+                "&nbsp;&nbsp;<i>No relevant caselaw found for this argument in the selected jurisdictions.</i>"
+            )
         if s['rebuttal']:
-            memo_lines.append(f"<b>Counterarguments and Rebuttal:</b> {s['rebuttal']}")
+            memo_lines.append(
+                f"<b>Counterarguments and Rebuttal:</b> {s['rebuttal']}")
         memo_lines.append("")
     memo_lines.append("<b>B. POTENTIAL DEFENSES</b>")
     for idx, d in enumerate(defense_sections, 1):
-        memo_lines.append(f"<b>{idx}. {d['title']}</b><br>{d['argument']}<br><b>Supporting Caselaw:</b>")
+        memo_lines.append(
+            f"<b>{idx}. {d['title']}</b><br>{d['argument']}<br><b>Supporting Caselaw:</b>"
+        )
         if d['cases']:
             for c in d['cases']:
                 bb = bluebook_citation(c)
@@ -432,36 +649,69 @@ if st.button("Run Caselaw Search & Generate Memo") and allow_export:
                     bb += f" — {c['summary']}"
                 memo_lines.append(f"&nbsp;&nbsp;• {bb}")
         else:
-            memo_lines.append("&nbsp;&nbsp;<i>No relevant caselaw found for this argument in the selected jurisdictions.</i>")
+            memo_lines.append(
+                "&nbsp;&nbsp;<i>No relevant caselaw found for this argument in the selected jurisdictions.</i>"
+            )
         if d['rebuttal']:
-            memo_lines.append(f"<b>Counterarguments and Rebuttal:</b> {d['rebuttal']}")
+            memo_lines.append(
+                f"<b>Counterarguments and Rebuttal:</b> {d['rebuttal']}")
         memo_lines.append("")
     memo_lines.extend([
-        "",
-        "<b>CONCLUSION</b>",
+        "", "<b>CONCLUSION</b>",
         "This memorandum is for internal defense team review only and is not intended for filing without attorney revision."
     ])
     st.markdown('<br>'.join(memo_lines), unsafe_allow_html=True)
 
     # --- DOCX export ---
-    doc_obj = build_case_analysis_memo_docx(
-        "CASE ANALYSIS MEMORANDUM",
-        attorney_name, case_number, today_date, memo_facts, suppression_sections, defense_sections
-    )
-    docx_bytes = BytesIO(); doc_obj.save(docx_bytes); docx_bytes.seek(0)
-    st.download_button("📥 Download Memo (.docx)", data=docx_bytes.getvalue(),
+    doc_obj = build_case_analysis_memo_docx("CASE ANALYSIS MEMORANDUM",
+                                            Defendant_name, case_number,
+                                            today_date, memo_facts,
+                                            suppression_sections,
+                                            defense_sections)
+    docx_bytes = BytesIO()
+    doc_obj.save(docx_bytes)
+    docx_bytes.seek(0)
+    st.download_button(
+        "📥 Download Memo (.docx)",
+        data=docx_bytes.getvalue(),
         file_name="Case_Analysis_Memorandum.docx",
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-
-    # --- PDF Export (plain but readable) ---
-    plain_preview = '\n'.join([c.replace('<br>', '\n').replace('&nbsp;', ' ') for c in memo_lines])
-    pdf_bytes = text_to_pdf(plain_preview)
-    st.download_button("📄 Download Memo as PDF",
-        data=pdf_bytes,
-        file_name="Case_Analysis_Memorandum.pdf",
-        mime="application/pdf"
+        mime=
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
+
+    # --- PDF Export (rich formatting, layout-matched to DOCX) ---
+    with open("temp_memo.docx", "wb") as temp_docx:
+        doc_obj.save(temp_docx.name)
+
+    pdf_path = "Case_Analysis_Memo.pdf"
+    convert_docx_to_pdf_rich(docx_path="temp_memo.docx",
+                             pdf_path=pdf_path,
+                             case_title="CASE ANALYSIS MEMORANDUM",
+                             case_number=case_number,
+                             memo_date=today_date)
+
+    with open(pdf_path, "rb") as f:
+        pdf_bytes = f.read()
+
+    st.download_button("📄 Download Memo as PDF",
+                       data=pdf_bytes,
+                       file_name="Case_Analysis_Memorandum.pdf",
+                       mime="application/pdf")
 
 if st.checkbox("🪵 Show Session State"):
     st.json(dict(st.session_state))
+
+if st.button("🔄 Start New Analysis"):
+    # Clear all relevant session state
+    keys_to_clear = [
+        "attorney_name", "defendant_name", "case_number", "motion_facts",
+        "phase2_issues", "phase2_defenses",
+        "issue_boxes", "defense_boxes",
+    ]
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
+
+    st.success("Session cleared. Please return to Phase 1 to begin a new analysis.")
+    st.stop()  # Prevent the rest of Phase 3 from running
 
