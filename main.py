@@ -314,3 +314,5 @@ if st.button("Continue to Legal Analysis in Phase 2", key="continue_phase2"):
 # --- Debugging: Show Session State ---
 if st.checkbox("Show Session State (Debug)", key="show_session_state"):
     st.write(dict(st.session_state))
+
+
