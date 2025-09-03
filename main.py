@@ -12,16 +12,17 @@ from PIL import Image
 import subprocess
 import mimetypes
 from moviepy.video.io.VideoFileClip import VideoFileClip
-from dotenv import load_dotenv
-load_dotenv()
+import streamlit as st
+from env_loader import load_env_keys
 
+# Load all API keys securely
+keys = load_env_keys()
+OPENAI_API_KEY = keys["OPENAI_API_KEY"]
+ASSEMBLYAI_API_KEY = keys["ASSEMBLYAI_API_KEY"]
 
-# --- CONFIG ---
-ASSEMBLYAI_API_KEY = os.environ.get("ASSEMBLYAI_API_KEY")
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-
+# Optional validation
 if not ASSEMBLYAI_API_KEY:
-    st.error("Please set your ASSEMBLYAI_API_KEY in your environment variables.")
+    st.error("Please set your ASSEMBLYAI_API_KEY in your .env file.")
     st.stop()
 
 # --- Utility Functions ---
