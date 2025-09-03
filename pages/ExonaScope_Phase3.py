@@ -714,4 +714,5 @@ if st.button("🔄 Start New Analysis"):
 
     st.success("Session cleared. Please return to Phase 1 to begin a new analysis.")
     st.stop()  # Prevent the rest of Phase 3 from running
+    st.markdown("[🔁 Return to Phase 1](/1_Phase1)")
 
